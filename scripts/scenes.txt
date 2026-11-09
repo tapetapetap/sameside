@@ -1,0 +1,163 @@
+# 같은편 시연 장면 좌표(data-model §9). make_area.py가 만든다. 원점 = 성균관대역
+# 반대편 함정: 민지는 2번 출구(서부로 서쪽), 차는 남쪽에서 서부로 북쪽 방향으로 온다 → 1순위는 동쪽 세븐일레븐
+opposite car 37.2935193 126.9700141
+opposite route 37.2935193 126.9700141
+opposite route 37.2945944 126.9700879
+opposite route 37.2951426 126.9701262
+opposite route 37.2957055 126.9702241
+opposite route 37.2963487 126.9704068
+opposite route 37.2966331 126.9705018
+opposite route 37.2969612 126.9706338
+opposite route 37.2973005 126.9708180
+opposite route 37.2976045 126.9709977
+opposite route 37.2978476 126.9711654
+opposite route 37.2981370 126.9713917
+opposite route 37.2984852 126.9717019
+opposite route 37.2988495 126.9720459
+opposite route 37.2989968 126.9721689
+opposite passenger 37.2998781 126.9722054
+opposite expect seven
+opposite speed 30
+
+decline car 37.2935193 126.9700141
+decline passenger 37.2998781 126.9722054
+cancel car 37.2935193 126.9700141
+cancel passenger 37.2998781 126.9722054
+stop car 37.2935193 126.9700141
+stop passenger 37.2998781 126.9722054
+cancel cancel_at 10
+stop route 37.2935193 126.9700141
+stop route 37.2945944 126.9700879
+stop route 37.2951426 126.9701262
+stop route 37.2957055 126.9702241
+stop route 37.2963487 126.9704068
+stop route 37.2966331 126.9705018
+stop route 37.2969612 126.9706338
+stop route 37.2973005 126.9708180
+stop route 37.2976045 126.9709977
+stop route 37.2978476 126.9711654
+stop route 37.2981370 126.9713917
+stop route 37.2984852 126.9717019
+stop route 37.2988495 126.9720459
+stop route 37.2989968 126.9721689
+stop stop_at 20
+
+# 손 안 대는 도착: 걷는 시간 2분(문턱 3분). ㄱ자 경로라 앱의 직선×1.3 추정이 실제와 30초 안에서 맞는다(data-model §2의 4)
+handsfree car 37.2935193 126.9547688
+handsfree route 37.2935193 126.9547688
+handsfree route 37.2935193 126.9700141
+handsfree route 37.2945944 126.9700879
+handsfree route 37.2951426 126.9701262
+handsfree route 37.2957055 126.9702241
+handsfree route 37.2963487 126.9704068
+handsfree route 37.2966331 126.9705018
+handsfree route 37.2969612 126.9706338
+handsfree route 37.2973005 126.9708180
+handsfree route 37.2976045 126.9709977
+handsfree route 37.2978476 126.9711654
+handsfree route 37.2981370 126.9713917
+handsfree route 37.2984852 126.9717019
+handsfree route 37.2988495 126.9720459
+handsfree route 37.2989968 126.9721689
+handsfree passenger 37.2989767 126.9733705
+handsfree expect seven
+handsfree walk 120
+handsfree speed 30
+
+fallback car 37.2935193 126.9547688
+fallback route 37.2935193 126.9547688
+fallback route 37.2935193 126.9700141
+fallback route 37.2945944 126.9700879
+fallback route 37.2951426 126.9701262
+fallback route 37.2957055 126.9702241
+fallback route 37.2963487 126.9704068
+fallback route 37.2966331 126.9705018
+fallback route 37.2969612 126.9706338
+fallback route 37.2973005 126.9708180
+fallback route 37.2976045 126.9709977
+fallback route 37.2978476 126.9711654
+fallback route 37.2981370 126.9713917
+fallback route 37.2984852 126.9717019
+fallback route 37.2988495 126.9720459
+fallback route 37.2989968 126.9721689
+fallback passenger 37.2989767 126.9733705
+
+# 반대 방향 진입: 세븐일레븐으로 정한 뒤 서부로 남쪽 방향으로 지나간다
+reverse car 37.3030086 126.9729454
+reverse route 37.3030086 126.9729454
+reverse route 37.3027842 126.9729412
+reverse route 37.3024289 126.9729043
+reverse route 37.3023403 126.9728950
+reverse route 37.3018008 126.9728217
+reverse route 37.3012676 126.9727386
+reverse route 37.3010702 126.9727078
+reverse route 37.3008336 126.9726718
+reverse route 37.3007621 126.9726602
+reverse route 37.3006613 126.9726440
+reverse route 37.3006089 126.9726359
+reverse route 37.3005066 126.9726199
+reverse route 37.3004382 126.9726090
+reverse route 37.3003651 126.9725979
+reverse route 37.3003302 126.9725924
+reverse route 37.3001168 126.9725989
+reverse route 37.2999323 126.9725551
+reverse route 37.2998048 126.9725253
+reverse route 37.2994144 126.9723429
+reverse route 37.2992361 126.9722265
+reverse route 37.2991835 126.9721922
+reverse route 37.2988991 126.9719687
+reverse route 37.2986048 126.9716793
+reverse passenger 37.2998781 126.9722054
+reverse expect seven
+
+# 건너편 경고: 남은 3분 안에 민지가 스타벅스 앞(서쪽 길가)으로 간다
+wrongside car 37.2935193 126.9547688
+wrongside route 37.2935193 126.9547688
+wrongside route 37.2935193 126.9700141
+wrongside route 37.2945944 126.9700879
+wrongside route 37.2951426 126.9701262
+wrongside route 37.2957055 126.9702241
+wrongside route 37.2963487 126.9704068
+wrongside route 37.2966331 126.9705018
+wrongside route 37.2969612 126.9706338
+wrongside route 37.2973005 126.9708180
+wrongside route 37.2976045 126.9709977
+wrongside route 37.2978476 126.9711654
+wrongside route 37.2981370 126.9713917
+wrongside route 37.2984852 126.9717019
+wrongside route 37.2988495 126.9720459
+wrongside route 37.2989968 126.9721689
+wrongside passenger 37.2989767 126.9733705
+wrongside passenger2 37.2989097 126.9719216 60
+
+# 두 정거장: 차는 화서역 너머 남동쪽에서 온다 → 1호선 한 정거장(성균관대역 → 화서역)이 5분 넘게 빠르다
+transit car 37.2570158 127.0198273
+transit passenger 37.2991996 126.9727588
+transit offer yes
+transit expect seven
+
+transit-small car 37.2933715 126.9700040
+transit-small passenger 37.2991996 126.9727588
+transit-small offer no
+
+# 같은 편 자리 없음: 민지가 랜드마크에서 300m 넘게 떨어진 서쪽 주택가에 있다
+nospot car 37.2935193 126.9700141
+nospot passenger 37.2998329 126.9660960
+
+# 2차 도착 확인: opposite의 차·경로, 민지는 올리브영 40m 남쪽 동쪽 인도(서 있을 곳 문장에 "올리브영을 지나"가 들어간다)
+arrive car 37.2935193 126.9700141
+arrive route 37.2935193 126.9700141
+arrive route 37.2945944 126.9700879
+arrive route 37.2951426 126.9701262
+arrive route 37.2957055 126.9702241
+arrive route 37.2963487 126.9704068
+arrive route 37.2966331 126.9705018
+arrive route 37.2969612 126.9706338
+arrive route 37.2973005 126.9708180
+arrive route 37.2976045 126.9709977
+arrive route 37.2978476 126.9711654
+arrive route 37.2981370 126.9713917
+arrive route 37.2984852 126.9717019
+arrive route 37.2988495 126.9720459
+arrive route 37.2989968 126.9721689
+arrive passenger 37.2979552 126.9713407

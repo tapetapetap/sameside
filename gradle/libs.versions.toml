@@ -1,0 +1,23 @@
+[versions]
+agp = "8.8.2"
+kotlin = "2.0.21"
+coreKtx = "1.13.1"
+junit = "4.13.2"
+pleosVehicle = "2.3.2"
+pleosTts = "3.3.1"
+pleosNavi = "3.0.5"
+pleosLocation = "1.1.3"
+zxing = "3.5.3"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+pleos-vehicle = { group = "ai.pleos.playground", name = "Vehicle", version.ref = "pleosVehicle" }
+pleos-tts = { group = "ai.pleos.playground", name = "TextToSpeech", version.ref = "pleosTts" }
+pleos-navi = { group = "ai.pleos.playground", name = "NaviHelper", version.ref = "pleosNavi" }
+pleos-location = { group = "ai.pleos.playground", name = "FusedLocation", version.ref = "pleosLocation" }
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pleos 색 토큰 (라이트). 값 출처: specs/002-redesign-21-features/research.md R8 -->
+<resources>
+    <color name="bg">#FFF7F8FA</color>
+    <color name="pane_top">#FFF1F3F6</color>
+    <color name="pane_bottom">#FFE9ECF1</color>
+    <color name="card">#FFFFFFFF</color>
+    <color name="line">#FFE3E5EA</color>
+    <color name="text1">#FF131417</color>
+    <color name="text2">#FF3A3C42</color>
+    <color name="text3">#FF6B6E76</color>
+    <color name="text4">#FF8B8F98</color>
+    <color name="blue">#FF0064FF</color>
+    <color name="blue_soft">#FFEAF1FF</color>
+    <color name="on_accent">#FFFFFFFF</color> <!-- 파랑·초록 바탕 위 글자, 두 테마 같음 -->
+    <color name="red">#FFFE3D16</color>
+    <color name="red_soft">#FFFFF4EF</color>
+    <color name="red_text">#FFB5300E</color>
+</resources>

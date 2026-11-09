@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>같은편</title>
+<style>
+  :root { --bg:#F7F8FA; --card:#FFFFFF; --text:#16181D; --sub:#5B6270; --line:#E3E6EB; --blue:#0064FF; --soft:#E8F0FF; --red:#E5484D; --redsoft:#FDECEC; --green:#00A86B; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#131417; --card:#1C1E23; --text:#F2F4F7; --sub:#A3AAB6; --line:#2B2F36; --soft:#1B2A45; --redsoft:#3A1E20; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:17px/1.5 -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; word-break:keep-all; }
+  main { max-width:480px; margin:0 auto; padding:20px 16px 40px; }
+  h1 { font-size:30px; line-height:1.25; margin:8px 0 6px; }
+  p { margin:6px 0; color:var(--sub); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:16px; margin:14px 0; }
+  .big { font-size:28px; font-weight:800; color:var(--text); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; }
+  button, a.btn { flex:1 1 140px; border:0; border-radius:14px; padding:14px 10px; font:inherit; font-weight:700; background:var(--soft); color:var(--blue); text-align:center; text-decoration:none; cursor:pointer; }
+  button.main, a.btn.main { background:var(--blue); color:#fff; }
+  .band { border-radius:14px; padding:14px 16px; margin:10px 0; font-weight:700; background:var(--redsoft); color:var(--red); border:1px solid var(--red); }
+  .band.go { background:var(--blue); color:#fff; border-color:var(--blue); font-size:22px; }
+  .small { font-size:13px; color:var(--sub); }
+  svg { width:100%; height:auto; display:block; background:var(--card); border:1px solid var(--line); border-radius:18px; margin:12px 0 4px; }
+  img.photo { width:100%; border-radius:18px; margin-top:10px; }
+</style>
+</head>
+<body>
+<main id="app"><p>불러오는 중…</p></main>
+<script>
+"use strict";
+const id = location.pathname.split("/").pop();
+const sim = new URLSearchParams(location.search).has("sim");
+const app = document.getElementById("app");
+let state = null, watching = null, geoError = false, audio = null, prev = {}, polling = false;
+
+const api = (path, body) => fetch(path, body ? { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+const put = async (body) => { await api(`/api/pickups/${id}/passenger`, body); poll(); };
+const mins = (sec) => Math.max(0, Math.ceil(sec / 60)); // 분 표시는 올림(data-model §8)
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function poll() {
+  if (polling) return; // 느린 망에서 조회가 쌓이지 않게
+  polling = true;
+  try {
+    const r = await fetch(`/api/pickups/${id}`, { cache: "no-store" });
+    state = r.status === 404 ? "gone" : await r.json();
+  } catch (e) { /* 다음 주기에 다시 */ }
+  polling = false;
+  // 동의한 뒤 페이지를 새로 열었으면 위치 보내기를 다시 켠다
+  if (state && state.passenger && state.passenger.consent === true && watching === null) watch();
+  render();
+}
+setInterval(poll, 2000);
+poll();
+
+/* 소리: 브라우저는 사용자가 한 번 누른 뒤에만 소리를 낸다(contracts/ui.md §3) */
+function unlock() { if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)(); render(); }
+function beep(times) {
+  if (!audio) return;
+  for (let i = 0; i < times; i++) {
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.frequency.value = 880; g.gain.value = 0.2;
+    o.connect(g); g.connect(audio.destination);
+    const t = audio.currentTime + i * 0.35; o.start(t); o.stop(t + 0.2);
+  }
+  if (navigator.vibrate) navigator.vibrate(times > 1 ? [300, 150, 300, 150, 300] : [300]);
+}
+
+function share() {
+  unlock();
+  put({ consent: true });
+  watch();
+}
+function watch() {
+  if (sim || !navigator.geolocation) return;
+  unwatch(); // 두 번 눌러도 감시는 하나
+  geoError = false;
+  watching = navigator.geolocation.watchPosition(
+    (p) => { geoError = false; put({ lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy }); },
+    () => { geoError = true; render(); },
+    { enableHighAccuracy: true, maximumAge: 2000 });
+}
+function unwatch() { if (watching !== null) navigator.geolocation.clearWatch(watching); watching = null; }
+function stopShare() { unwatch(); put({ stop: true }); }
+
+/* 지점 앞 길, 들어오는 방향 화살표, 지점 별, 내 위치, 300m 안이면 차 */
+/* 지점 s를 원점으로 한 m 단위 평면(x 동쪽, y 북쪽) */
+const xyFrom = (s) => { const k = Math.cos(s.lat * Math.PI / 180) * 111320; return (la, lo) => [(lo - s.lon) * k, (la - s.lat) * 110540]; };
+
+function drawing(s, me, car) {
+  const xy = xyFrom(s);
+  const road = s.road.map(([la, lo]) => xy(la, lo));
+  const h = s.heading * Math.PI / 180, tail = [-Math.sin(h) * 60, -Math.cos(h) * 60];
+  const pts = [...road, [0, 0], tail];
+  const mine = me && me.lat != null ? xy(me.lat, me.lon) : null;
+  const carXY = car ? xy(car.lat, car.lon) : null;
+  const carNear = carXY && Math.hypot(...carXY) <= 300;
+  if (mine) pts.push(mine);
+  if (carNear) pts.push(carXY);
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const minX = Math.min(...xs) - 20, maxX = Math.max(...xs) + 20, minY = Math.min(...ys) - 20, maxY = Math.max(...ys) + 20;
+  const W = 340, H = 240, sc = Math.min(W / (maxX - minX), H / (maxY - minY));
+  const P = ([x, y]) => [((x - minX) * sc).toFixed(1), (H - (y - minY) * sc).toFixed(1)];
+  const line = road.map((p) => P(p).join(",")).join(" ");
+  const [ax, ay] = P(tail), [sx, sy] = P([0, 0]);
+  let out = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="만날 곳 그림">
+    <defs><marker id="m" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--blue)"/></marker></defs>
+    <polyline points="${line}" fill="none" stroke="var(--line)" stroke-width="14" stroke-linecap="round"/>
+    <line x1="${ax}" y1="${ay}" x2="${sx}" y2="${sy}" stroke="var(--blue)" stroke-width="4" marker-end="url(#m)"/>
+    <text x="${sx}" y="${(+sy - 14).toFixed(1)}" text-anchor="middle" font-size="22" fill="var(--blue)">★</text>`;
+  if (mine) { const [mx, my] = P(mine); out += `<circle cx="${mx}" cy="${my}" r="8" fill="var(--green)"/><text x="${mx}" y="${(+my + 24).toFixed(1)}" text-anchor="middle" font-size="13" fill="var(--sub)">나</text>`; }
+  if (carNear) { const [cx, cy] = P(carXY); out += `<rect x="${(cx - 9).toFixed(1)}" y="${(cy - 6).toFixed(1)}" width="18" height="12" rx="3" fill="var(--blue)"/><text x="${cx}" y="${(+cy + 22).toFixed(1)}" text-anchor="middle" font-size="13" fill="var(--sub)">차</text>`; }
+  return out + "</svg>";
+}
+
+/* 길을 건너야 하는 지점: 건너기가 차 유턴보다 빠르면 한 줄. k는 차가 센다(2차 data-model §8) */
+const compare = (s, who) => Number.isInteger(s.fasterMin) && s.fasterMin > 0
+  ? `<p>${who}님이 길을 건너는 게 차가 유턴하는 것보다 ${s.fasterMin}분 빨라요</p>` : "";
+
+function render() {
+  if (state === null) return;
+  const parts = [];
+  if (state === "gone") { unwatch(); app.innerHTML = `<h1>끝난 픽업이에요</h1>`; return; }
+  const me = state.passenger || {};
+  // 소리는 누른 뒤에만 난다. 시연 모드, 또는 동의한 뒤 페이지를 새로 열었을 때 버튼을 보인다
+  if ((sim || me.consent === true) && !audio) parts.push(`<div class="row"><button class="main" onclick="unlock()">소리 켜기</button></div>`);
+  const who = esc(state.name);
+  const ended = { met: "만났어요 · 위치 공유를 끝냈어요", canceled: "픽업이 취소됐어요", stopped: "위치 공유를 껐어요", expired: "시간이 지나 위치 공유를 끝냈어요" }[state.status];
+  if (ended) { unwatch(); app.innerHTML = `<h1>${ended}</h1>`; return; }
+
+  // 알림 띠: 켜지는 순간 한 번만 소리를 낸다. 순서는 도착, 지금 나오세요, 건너편(contracts/ui.md 2차 §3)
+  if (state.arrived && !prev.arrived) beep(2);
+  if (state.outNow && !prev.outNow) beep(3);
+  if (state.crossOver && !prev.crossOver) beep(1);
+  prev = { arrived: state.arrived, outNow: state.outNow, crossOver: state.crossOver };
+  const s = state.spots && state.spots[state.chosen >= 0 ? state.chosen : 0];
+  if (state.arrived) parts.push(`<div class="band go">${state.crossOver ? "차가 길 건너편에 도착했어요. 가까운 횡단보도로 건너 주세요" : `차가 도착했어요. ${esc(s ? s.name : "")}으로 오세요`}</div>`);
+  const phone = state.car && state.car.phone;
+  if (state.outNow) {
+    // "지금 나가요"를 누르면 운전자 쪽 자동 전화가 걸리지 않는다
+    const btns = [me.ack ? `<div style="flex:1 1 140px">운전자에게 나간다고 알렸어요</div>` : `<button onclick="put({ack:true})">지금 나가요</button>`];
+    if (phone) btns.push(`<a class="btn" href="tel:${esc(phone)}">운전자에게 전화</a>`);
+    parts.push(`<div class="band go">지금 나오세요<div class="row">${btns.join("")}</div></div>`);
+  }
+  if (state.crossOver) parts.push(`<div class="band">차가 길 건너편으로 와요. 건너편에서 기다려 주세요</div>`);
+  // 만날 곳이 정해진 뒤 위치가 끊기면 안내는 그대로 두고 띠로만 알린다
+  if (geoError && state.status !== "link") parts.push(`<div class="band">위치를 받지 못하고 있어요. 브라우저 위치 허용을 확인해 주세요</div>`);
+  // 건너오라고 한 뒤에는 지점 쪽으로 오라는 띠가 반대 말이 된다
+  if (state.wrongSide && !state.crossOver && s) parts.push(`<div class="band">앞 횡단보도를 건너 ${esc(s.name)}으로 와 주세요</div>`);
+
+  if (me.consent === null || me.consent === undefined) {
+    parts.push(`<h1>${who}님을 데리러 가요</h1><p>위치를 공유하면 만나기 좋은 곳을 골라 드려요. 공유는 타면 저절로 끝나요.</p>
+      <div class="row"><button class="main" onclick="share()">위치 공유하고 시작</button><button onclick="put({consent:false})">괜찮아요</button></div>`);
+  } else if (me.consent === false) {
+    parts.push(`<h1>위치를 공유하지 않았어요</h1><div class="row"><button class="main" onclick="share()">다시 공유하기</button></div>`);
+  } else if (geoError && state.status === "link") {
+    parts.push(`<h1>위치를 받지 못했어요. 브라우저 위치 허용을 확인해 주세요</h1><div class="row"><button class="main" onclick="share()">다시 시도</button></div>`);
+  } else if (state.status === "link") {
+    parts.push(`<h1>만날 곳을 고르고 있어요</h1>`);
+  } else if (state.status === "nospot") {
+    parts.push(`<h1>가까운 곳에 같은 편 자리가 없어요. 운전자가 직접 찾아갈게요</h1>`);
+    if (state.etaSec != null) parts.push(`<p>차 ${mins(state.etaSec)}분</p>`);
+  } else if (state.status === "spots" && s) {
+    parts.push(`<p>운전자가 만날 곳을 확인하고 있어요</p><div class="big">${esc(s.name)}</div>${compare(s, who)}`);
+  } else if (state.status === "going" && s) {
+    parts.push(`<div class="big">${esc(s.name)}</div>${compare(s, who)}`);
+    if (s.photo) parts.push(`<img class="photo" src="/photo/${encodeURIComponent(s.photo)}" alt="${esc(s.name)} 사진">`);
+    parts.push(drawing(s, me, state.pos));
+    parts.push(`<p>차는 이쪽 길로 와서 여기 서요</p>`);
+    if (s.standLine) parts.push(`<p><b>${esc(s.standLine)}</b></p>`);
+    if (me.transit === "accept" && state.offer) {
+      parts.push(`<p class="big" style="font-size:20px">${esc(state.offer.line)} 타고 ${esc(state.offer.alightName)}에서 내려 ${esc(s.name)}으로 와 주세요</p>`);
+    } else if (state.etaSec != null && state.walkSec != null) {
+      const left = Math.ceil((state.etaSec - state.walkSec - 60) / 60);
+      parts.push(`<p class="big" style="font-size:22px">${left > 0 ? `${left}분 뒤 나오면 딱 맞아요` : "지금 나오세요"}</p>`);
+    }
+    const c = state.car || {}, km = state.pos ? Math.hypot(...xyFrom(s)(state.pos.lat, state.pos.lon)) / 1000 : null;
+    const carText = [c.color, c.model, c.plate].filter(Boolean).join(" ");
+    const carLine = [state.etaSec != null ? `차 ${mins(state.etaSec)}분` : "", km != null && km > 0.3 ? `${km.toFixed(1)} km` : "", esc(carText)];
+    parts.push(`<p>${carLine.filter(Boolean).join(" · ")}</p>`);
+  }
+  // 대중교통 카드: 제안이 있고 아직 고르지 않았을 때
+  if ((state.status === "spots" || state.status === "going") && state.offer && !me.transit) {
+    const o = state.offer;
+    parts.push(`<div class="card"><b>${esc(o.line)} ${o.stops}정거장 타고 ${esc(o.alightName)}에서 내리면 ${o.gainMin}분 빨리 만나요</b>
+      <div class="row"><button class="main" onclick="put({transit:'accept'})">그렇게 갈게요</button><button onclick="put({transit:'decline'})">그냥 걸어갈게요</button></div>
+      <p class="small">시연용 준비 데이터예요</p></div>`);
+  }
+  if (me.consent === true) {
+    const btns = [];
+    if (state.status === "going") btns.push(`<button onclick="put({ready:true})">나와 있어요</button>`, `<button onclick="put({late:true})">조금 늦어요</button>`);
+    if (state.status === "going" || state.status === "nospot") btns.push(`<button onclick="put({boarded:true})">탔어요</button>`);
+    btns.push(`<button onclick="stopShare()">공유 끄기</button>`);
+    parts.push(`<div class="row">${btns.join("")}</div>`);
+  }
+  app.innerHTML = parts.join("");
+}
+</script>
+</body>
+</html>
