@@ -20,4 +20,11 @@
     <color name="red">#FFFF4C28</color>
     <color name="red_soft">#FF3A1810</color>
     <color name="red_text">#FFFF8A70</color>
+    <!-- 3차 지도·연락 줄(specs/003-group-pickup contracts/ui.md §6). green·avatar는 위·밝은 파일 값 -->
+    <color name="map_bg">#FF1A1D22</color>
+    <color name="road">#FF3A3F47</color>
+    <color name="road_edge">#FF4A505A</color>
+    <color name="green_soft">#FF10291E</color>
+    <color name="amber">#FFF2A33A</color>
+    <color name="amber_soft">#FF2E2310</color>
 </resources>

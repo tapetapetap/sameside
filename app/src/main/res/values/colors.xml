@@ -16,4 +16,17 @@
     <color name="red">#FFFE3D16</color>
     <color name="red_soft">#FFFFF4EF</color>
     <color name="red_text">#FFB5300E</color>
+    <!-- 3차 지도·연락 줄(specs/003-group-pickup contracts/ui.md §6) -->
+    <color name="map_bg">#FFEEF1F4</color>
+    <color name="road">#FFFFFFFF</color>
+    <color name="road_edge">#FFC9CED6</color>
+    <color name="green">#FF00A86B</color>
+    <color name="green_soft">#FFE3F6EE</color>
+    <color name="amber">#FFE08A12</color>
+    <color name="amber_soft">#FFFFF1DC</color>
+    <color name="avatar1">#FF5B7CFA</color>
+    <color name="avatar2">#FFF2994A</color>
+    <color name="avatar3">#FF27AE60</color>
+    <color name="avatar4">#FFEB5757</color>
+    <color name="avatar5">#FF9B51E0</color>
 </resources>

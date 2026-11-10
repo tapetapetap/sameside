@@ -18,7 +18,13 @@
   button, a.btn { flex:1 1 140px; border:0; border-radius:14px; padding:14px 10px; font:inherit; font-weight:700; background:var(--soft); color:var(--blue); text-align:center; text-decoration:none; cursor:pointer; }
   button.main, a.btn.main { background:var(--blue); color:#fff; }
   .band { border-radius:14px; padding:14px 16px; margin:10px 0; font-weight:700; background:var(--redsoft); color:var(--red); border:1px solid var(--red); }
-  .band.go { background:var(--blue); color:#fff; border-color:var(--blue); font-size:22px; }
+  .band.go { background:var(--blue); color:#fff; border-color:var(--blue); font-size:22px; --glow:rgba(0,100,255,.25); }
+  .band.call { background:var(--green); color:#fff; border-color:var(--green); font-size:22px; --glow:rgba(0,168,107,.25); }
+  /* 3차 맥박(contracts/ui.md §5): 1.2초마다 1.03배, 같은 박자로 띠 색 그림자 0→10px. 다시 그려도 박자가 이어지게 지연을 시각으로 맞춘다 */
+  @keyframes pulse { 0%, 100% { transform:scale(1); box-shadow:0 0 0 0 var(--glow); } 50% { transform:scale(1.03); box-shadow:0 0 0 10px var(--glow); } }
+  .pulse { animation:pulse 1.2s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .pulse { animation:none; } }
+  .chip { display:inline-block; background:var(--soft); color:var(--blue); border-radius:999px; padding:6px 12px; font-weight:700; margin:6px 0; }
   .small { font-size:13px; color:var(--sub); }
   svg { width:100%; height:auto; display:block; background:var(--card); border:1px solid var(--line); border-radius:18px; margin:12px 0 4px; }
   img.photo { width:100%; border-radius:18px; margin-top:10px; }
@@ -36,6 +42,7 @@ let state = null, watching = null, geoError = false, audio = null, prev = {}, po
 const api = (path, body) => fetch(path, body ? { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
 const put = async (body) => { await api(`/api/pickups/${id}/passenger`, body); poll(); };
 const mins = (sec) => Math.max(0, Math.ceil(sec / 60)); // 분 표시는 올림(data-model §8)
+const beat = () => `animation-delay:-${Date.now() % 1200}ms`;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 async function poll() {
@@ -113,6 +120,13 @@ function drawing(s, me, car) {
   return out + "</svg>";
 }
 
+/* 3차 함께 타는 사람 칩: 빠진 사람은 지우고, 탔으면 "탔어요" */
+function together() {
+  const g = (state.group || []).filter((x) => !x.out);
+  const how = (x) => x.aboard ? "탔어요" : x.mode === "walk" ? "걸어서" : x.mode;
+  return g.length ? `<div class="chip">함께 타요: ${g.map((x) => `${esc(x.name)}님${how(x) ? `(${esc(how(x))})` : ""}`).join(" · ")}</div>` : "";
+}
+
 /* 길을 건너야 하는 지점: 건너기가 차 유턴보다 빠르면 한 줄. k는 차가 센다(2차 data-model §8) */
 const compare = (s, who) => Number.isInteger(s.fasterMin) && s.fasterMin > 0
   ? `<p>${who}님이 길을 건너는 게 차가 유턴하는 것보다 ${s.fasterMin}분 빨라요</p>` : "";
@@ -135,12 +149,14 @@ function render() {
   prev = { arrived: state.arrived, outNow: state.outNow, crossOver: state.crossOver };
   const s = state.spots && state.spots[state.chosen >= 0 ? state.chosen : 0];
   if (state.arrived) parts.push(`<div class="band go">${state.crossOver ? "차가 길 건너편에 도착했어요. 가까운 횡단보도로 건너 주세요" : `차가 도착했어요. ${esc(s ? s.name : "")}으로 오세요`}</div>`);
+  // 3차: 운전자가 이 사람에게 전화하는 동안(띠 순서는 도착 → 전화 → 지금 나오세요 → 건너편)
+  if (state.calling) parts.push(`<div class="band call pulse" style="${beat()}">운전자가 전화하고 있어요. 받아 주세요</div>`);
   const phone = state.car && state.car.phone;
   if (state.outNow) {
     // "지금 나가요"를 누르면 운전자 쪽 자동 전화가 걸리지 않는다
     const btns = [me.ack ? `<div style="flex:1 1 140px">운전자에게 나간다고 알렸어요</div>` : `<button onclick="put({ack:true})">지금 나가요</button>`];
     if (phone) btns.push(`<a class="btn" href="tel:${esc(phone)}">운전자에게 전화</a>`);
-    parts.push(`<div class="band go">지금 나오세요<div class="row">${btns.join("")}</div></div>`);
+    parts.push(`<div class="band go pulse" style="${beat()}">지금 나오세요<div class="row">${btns.join("")}</div></div>`);
   }
   if (state.crossOver) parts.push(`<div class="band">차가 길 건너편으로 와요. 건너편에서 기다려 주세요</div>`);
   // 만날 곳이 정해진 뒤 위치가 끊기면 안내는 그대로 두고 띠로만 알린다
@@ -157,18 +173,24 @@ function render() {
     parts.push(`<h1>위치를 받지 못했어요. 브라우저 위치 허용을 확인해 주세요</h1><div class="row"><button class="main" onclick="share()">다시 시도</button></div>`);
   } else if (state.status === "link") {
     parts.push(`<h1>만날 곳을 고르고 있어요</h1>`);
+  } else if (state.status === "nospot" && (state.group || []).length) {
+    parts.push(`<h1>함께 만날 곳을 찾지 못했어요. 운전자가 연락할게요</h1>`);
   } else if (state.status === "nospot") {
     parts.push(`<h1>가까운 곳에 같은 편 자리가 없어요. 운전자가 직접 찾아갈게요</h1>`);
     if (state.etaSec != null) parts.push(`<p>차 ${mins(state.etaSec)}분</p>`);
   } else if (state.status === "spots" && s) {
-    parts.push(`<p>운전자가 만날 곳을 확인하고 있어요</p><div class="big">${esc(s.name)}</div>${compare(s, who)}`);
+    parts.push(`<p>운전자가 만날 곳을 확인하고 있어요</p><div class="big">${esc(s.name)}</div>${together()}${compare(s, who)}`);
   } else if (state.status === "going" && s) {
-    parts.push(`<div class="big">${esc(s.name)}</div>${compare(s, who)}`);
+    parts.push(`<div class="big">${esc(s.name)}</div>${together()}${compare(s, who)}`);
     if (s.photo) parts.push(`<img class="photo" src="/photo/${encodeURIComponent(s.photo)}" alt="${esc(s.name)} 사진">`);
     parts.push(drawing(s, me, state.pos));
     parts.push(`<p>차는 이쪽 길로 와서 여기 서요</p>`);
     if (s.standLine) parts.push(`<p><b>${esc(s.standLine)}</b></p>`);
-    if (me.transit === "accept" && state.offer) {
+    const plan = state.plan;
+    if (plan && plan.mode === "transit") { // 3차 함께 태우기: 이 사람은 대중교통으로 모인다
+      parts.push(`<div class="card"><b>${esc(plan.line)} ${esc(plan.stops)}정거장 타고 ${esc(plan.alightName)}에서 내려 ${esc(s.name)}으로 와 주세요</b>
+        <div class="row">${me.transit === "accept" ? `<div style="flex:1 1 140px">알려 드렸어요</div>` : `<button class="main" onclick="put({transit:'accept'})">알겠어요</button>`}</div></div>`);
+    } else if (me.transit === "accept" && state.offer) {
       parts.push(`<p class="big" style="font-size:20px">${esc(state.offer.line)} 타고 ${esc(state.offer.alightName)}에서 내려 ${esc(s.name)}으로 와 주세요</p>`);
     } else if (state.etaSec != null && state.walkSec != null) {
       const left = Math.ceil((state.etaSec - state.walkSec - 60) / 60);
@@ -182,7 +204,7 @@ function render() {
   // 대중교통 카드: 제안이 있고 아직 고르지 않았을 때
   if ((state.status === "spots" || state.status === "going") && state.offer && !me.transit) {
     const o = state.offer;
-    parts.push(`<div class="card"><b>${esc(o.line)} ${o.stops}정거장 타고 ${esc(o.alightName)}에서 내리면 ${o.gainMin}분 빨리 만나요</b>
+    parts.push(`<div class="card"><b>${esc(o.line)} ${esc(o.stops)}정거장 타고 ${esc(o.alightName)}에서 내리면 ${esc(o.gainMin)}분 빨리 만나요</b>
       <div class="row"><button class="main" onclick="put({transit:'accept'})">그렇게 갈게요</button><button onclick="put({transit:'decline'})">그냥 걸어갈게요</button></div>
       <p class="small">시연용 준비 데이터예요</p></div>`);
   }

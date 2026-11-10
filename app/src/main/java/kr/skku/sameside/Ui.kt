@@ -12,6 +12,8 @@ import android.widget.TextView
 
 // 첫 앱 "안 써본 기능" Screens.kt·Views.kt에서 가져온 화면 도우미(plan "첫 앱에서 가져오는 것")
 
+private val AVATARS = listOf(R.color.avatar1, R.color.avatar2, R.color.avatar3, R.color.avatar4, R.color.avatar5)
+
 /** 화면을 코드로 조립하는 작은 도구들. 글자 크기는 contracts 머리 */
 class Ui(val ctx: Context) {
     private val density = ctx.resources.displayMetrics.density
@@ -72,6 +74,14 @@ class Ui(val ctx: Context) {
             setCompoundDrawablesRelative(d, null, null, null)
             compoundDrawablePadding = px(8)
         }
+    }
+
+    /** 이름 첫 글자 원(3차 FR-046). 색은 이름마다 다섯 가지 중 하나다 */
+    fun avatar(name: String, size: Int = 48) = text(name.take(1), size * 0.42f, R.color.on_accent, 700).apply {
+        gravity = Gravity.CENTER
+        background = round(c(AVATARS[Math.floorMod(name.hashCode(), AVATARS.size)]), 100f)
+        layoutParams = LinearLayout.LayoutParams(px(size), px(size))
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO // 이름은 옆 글자가 읽는다
     }
 
     fun banner(text: String) = row(14, dot(R.color.red), text(text, 22f, R.color.red_text, 600), grow = 1).apply {

@@ -49,6 +49,7 @@ import android.telecom.TelecomManager
 import android.util.Log
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import org.json.JSONObject
 import java.util.Locale
 import java.util.concurrent.Executors
 
@@ -63,6 +64,7 @@ class PickupService : Service() {
         private const val TAG = "PickupService"
         private const val CH = "pickup"
         private const val ID = 1
+        private const val CALLING_MS = 60_000L // 전화 건 뒤 이만큼은 페이지에 전화 띠(FR-067)
         private const val POLL_MS = 2_000L
         private const val RETRY_MS = 10_000L
         private const val LOCATION = "pleos.car.permission.FUSED_LOCATION"
@@ -76,6 +78,11 @@ class PickupService : Service() {
             private set
         /** 링크를 만드는 중이다(서버에 못 만들어 다시 시도하는 중 포함) */
         val creating get() = instance?.waiting != null
+        /** 3차: 기기에 진행 중인 통화가 있다(null = 볼 수 없음)와 그 상태가 시작된 때(elapsedRealtime). research R22 */
+        var inCall: Boolean? = null
+            private set
+        var callSince: Long? = null
+            private set
         var onUpdate: (() -> Unit)? = null
         private var instance: PickupService? = null
 
@@ -83,7 +90,10 @@ class PickupService : Service() {
             ContextCompat.startForegroundService(context, Intent(context, PickupService::class.java))
 
         /** 사람 줄을 누르면(정차 중). 진행 중인 픽업이 있으면 무시한다 */
-        fun begin(person: Person) = instance?.begin(person)
+        fun begin(person: Person) = instance?.begin(listOf(person))
+
+        /** 3차 "n명 함께 데리러 가기": 사람마다 기록을 만든다 */
+        fun beginGroup(persons: List<Person>) = instance?.begin(persons)
 
         fun send(e: Event) = instance?.handle(e)
 
@@ -107,7 +117,9 @@ class PickupService : Service() {
     // 픽업이 없을 때도 받아 두는 마지막 값(새 픽업의 시작값, data-model §7 보충)
     private var lastPos: LatLon? = null
     private val seats = mutableMapOf<String, Boolean>()
-    private var waiting: Person? = null // 서버에 못 만든 채 다시 시도하는 사람
+    private var waiting: List<Person>? = null // 서버에 못 만든 채 다시 시도하는 사람들
+    private var made = mutableListOf<Relay.Created?>() // waiting 순서. 만든 사람은 다시 만들지 않는다
+    private var making: List<Person>? = null // 만들기 요청이 가는 사람들(같은 사람을 다시 눌러도 하나만)
     private var pendingWaypoint: Spot? = null
     // 내비 방식(2차 data-model §7). 픽업마다 새로 시작하고, SetNavi마다 토큰을 바꿔 늦은 콜백을 버린다
     private enum class Navi { NONE, ASKING, WAYPOINT } // NONE은 목적지 방식(또는 아직 넣지 않음)
@@ -119,8 +131,9 @@ class PickupService : Service() {
     private var waypoints: List<String>? = null
     private var nextAdd: Spot? = null // 경유지 방식: 진입 경유지 ADD를 받으면 이 지점을 SECOND로 넣는다
     private var afterRemove: Runnable? = null
-    // 끝 상태를 서버가 아직 받지 않은 픽업. 확인을 누르거나 새 픽업을 시작해도 받을 때까지 poll마다 다시 보낸다
-    private val unsentEnds = mutableListOf<Pickup>()
+    // 끝 상태를 서버가 아직 받지 않은 사람 기록. 확인을 누르거나 새 픽업을 시작해도 받을 때까지 poll마다 다시 보낸다
+    private class EndSend(val id: String, val key: String, val json: JSONObject)
+    private val unsentEnds = mutableListOf<EndSend>()
     private var endSending = false
     private var getting = false
     private var putting = false
@@ -133,8 +146,9 @@ class PickupService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        getSystemService(NotificationManager::class.java)
-            .createNotificationChannel(NotificationChannel(CH, "픽업 도우미", NotificationManager.IMPORTANCE_MIN))
+        getSystemService(NotificationManager::class.java).apply {
+            createNotificationChannel(NotificationChannel(CH, "픽업 도우미", NotificationManager.IMPORTANCE_MIN))
+        }
         ServiceCompat.startForeground(this, ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         startTts()
         watchCar()
@@ -159,33 +173,51 @@ class PickupService : Service() {
 
     /* ---------- 픽업 시작과 이벤트 ---------- */
 
-    private fun begin(person: Person) {
+    /** 사람마다 서버 기록을 만든다. 실패한 사람만 2초 뒤 다시 보내고, 모두 만들어지면 픽업이다(3차 data-model §9) */
+    private fun begin(persons: List<Person>) {
         if (pickup?.status?.ended == false) return
-        waiting = person
+        if (waiting == persons && making == persons) return
+        if (waiting != persons) {
+            // 다시 시도하는 사이 다른 사람을 골랐다: 이미 만든 기록은 링크가 살아 있지 않게 끝낸다
+            made.filterNotNull().forEach { unsentEnds += EndSend(it.id!!, it.key!!, JSONObject().put("status", Status.CANCELED.wire)) }
+            sendEnds()
+            waiting = persons; made = MutableList(persons.size) { null }
+        }
+        making = persons
         val car = People.loadCar(this)
+        val todo = persons.indices.filter { made[it] == null }
         io.execute {
-            val made = relay.create(person.name, car)
+            val got = todo.map { it to relay.create(persons[it].name, car) }
             main.post {
-                if (waiting != person) return@post // 그사이 다른 사람을 골랐다
-                if (made.code == 201 && made.id != null && made.key != null) {
+                if (making == persons) making = null
+                if (waiting != persons) { // 그사이 다른 사람을 골랐다: 방금 만든 기록도 끝낸다
+                    got.forEach { (_, c) -> if (c.id != null && c.key != null) unsentEnds += EndSend(c.id, c.key, JSONObject().put("status", Status.CANCELED.wire)) }
+                    sendEnds()
+                    return@post
+                }
+                got.forEach { (i, c) -> if (c.code == 201 && c.id != null && c.key != null) made[i] = c }
+                if (made.all { it != null }) {
                     waiting = null
                     serverDown = false
-                    pickup = Pickup(made.id, made.key, person, now()).also { p ->
+                    pickup = Pickup(persons.indices.map { Member(persons[it], made[it]!!.id!!, made[it]!!.key!!) }, now()).also { p ->
                         p.park = park
                         lastPos?.let { p.track += Fix(it, now()) }
                         p.emptySeatsAtStart = seats.filterValues { !it }.keys
                     }
-                    Log.i(TAG, "픽업 시작, 빈 좌석 ${pickup?.emptySeatsAtStart}") // 링크 id는 위치를 볼 수 있는 열쇠라 로그에 남기지 않는다
+                    // 링크 id는 위치를 볼 수 있는 열쇠라 로그에 남기지 않는다
+                    Log.i(TAG, "픽업 시작, 빈 좌석 ${pickup?.emptySeatsAtStart}" + if (persons.size > 1) ", ${persons.size}명" else "")
                     push()
                 } else {
                     serverDown = true
-                    main.postDelayed({ if (waiting == person) begin(person) }, POLL_MS)
+                    main.postDelayed({ if (waiting == persons) begin(persons) }, POLL_MS)
                 }
                 onUpdate?.invoke()
             }
         }
         onUpdate?.invoke()
     }
+
+    private var batching = false // poll 결과를 한꺼번에 넣는 동안 화면은 마지막에 한 번만 그린다
 
     private fun handle(e: Event) {
         when (e) {
@@ -197,12 +229,12 @@ class PickupService : Service() {
         val p = pickup?.takeUnless { it.status.ended }
         if (e is Event.Gear) Log.i(TAG, "기어 ${if (e.park) "P" else "P 아님"}")
         if (p != null) {
-            val wasOut = p.outNow
+            val wasOut = p.members.map { it.outNow }
             run(Pick.step(area, p, e, now()))
-            if (!wasOut && p.outNow) Log.i(TAG, "알림 보냄") // 시연이 알림 시각을 기기 로그로 잰다
+            p.members.forEachIndexed { i, m -> if (!wasOut[i] && m.outNow) Log.i(TAG, "알림 보냄") } // 시연이 알림 시각을 기기 로그로 잰다
             if (e is Event.Arrive) Log.i(TAG, "도착 확인 ${if (e.send) "보내기" else "아니요"}: arrived=${p.arrived}")
         }
-        if (p != null || e is Event.Gear) onUpdate?.invoke() // 기어는 픽업이 없어도 사람 줄을 켜고 끈다
+        if (!batching && (p != null || e is Event.Gear)) onUpdate?.invoke() // 기어는 픽업이 없어도 사람 줄을 켜고 끈다
     }
 
     private fun run(actions: List<Action>) = actions.forEach { a ->
@@ -212,32 +244,67 @@ class PickupService : Service() {
             is Action.SetNavi -> setNavi(a.spot)
             Action.ClearNavi -> clearNavi()
             Action.Push -> push() // 끝난 픽업은 보내지 않는다. End가 끝 상태를 보낸다
-            Action.End -> { pickup?.let { unsentEnds += it }; sendEnds() }
+            Action.End -> pickup?.let { p -> // 빠지지 않은 사람마다 끝 상태(빠진 사람은 이미 끝났다)
+                p.active.forEach { unsentEnds += EndSend(it.id, it.key, Relay.carJson(p, it, null)) }
+                sendEnds()
+            }
+            is Action.EndMember -> pickup?.members?.getOrNull(a.index)?.let { // 함께 태우기에서 거절한 사람
+                unsentEnds += EndSend(it.id, it.key, JSONObject().put("status", Status.CANCELED.wire))
+                sendEnds()
+            }
         }
     }
 
-    /** 2초마다: 밀린 끝 상태와 올리기를 다시 보내고, 서버 상태를 읽은 뒤 Tick */
+    /** 2초마다: 통화 상태를 보고, 밀린 끝 상태와 올리기를 다시 보내고, 사람마다 서버 상태를 읽은 뒤 Tick */
     private fun poll() {
         if (stopped) return
         main.postDelayed(::poll, POLL_MS)
+        watchCall()
         sendEnds()
         flush()
         val p = pickup?.takeUnless { it.status.ended } ?: return
         if (getting) return
         getting = true
+        val who = p.members.withIndex().filter { !it.value.out }.map { Triple(it.index, it.value.id, it.value.key) }
         io.execute {
-            val (code, remote) = relay.get(p.id, p.key)
+            val got = who.map { (i, id, key) -> i to relay.get(id, key, i) }
             main.post {
                 getting = false
                 if (pickup !== p) return@post
-                serverDown = code == -1
-                when {
-                    code == 404 -> handle(Event.Gone)
-                    remote != null -> handle(remote)
+                serverDown = got.any { it.second.first == -1 }
+                batching = true
+                for ((i, r) in got) {
+                    val (code, remote) = r
+                    when {
+                        code == 404 -> handle(Event.Gone(i))
+                        remote != null -> handle(remote)
+                    }
                 }
                 handle(Event.Tick)
+                batching = false
+                onUpdate?.invoke()
             }
         }
+    }
+
+    /** 통화 상태(READ_PHONE_STATE). 바뀌면 연락 줄과 페이지 전화 띠를 다시 올린다(3차 data-model §9) */
+    private fun watchCall() {
+        val now = runCatching {
+            if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED)
+                getSystemService(TelecomManager::class.java).isInCall else null
+        }.getOrNull()
+        if (now == inCall) return
+        inCall = now
+        callSince = if (now == true) now() else null
+        Log.i(TAG, "통화 중 $now")
+        if (pickup?.status?.ended == false) { push(); onUpdate?.invoke() }
+    }
+
+    /** 페이지 전화 띠: 전화한 뒤 60초, 또는 이 사람이 가장 최근에 전화한 사람이고 통화가 이어지는 동안(FR-067) */
+    private fun calling(p: Pickup, m: Member): Boolean {
+        val at = m.callAt ?: return false
+        if (m.phoned != true) return false
+        return now() - at < CALLING_MS || (p.lastCaller === m && inCallWith(m, inCall, callSince))
     }
 
     private fun push() {
@@ -245,44 +312,50 @@ class PickupService : Service() {
         flush()
     }
 
+    /** 빠지지 않은 사람마다 그 사람 값을 차례로 올린다. 409는 그 사람 기록만 다시 읽는다 */
     private fun flush() {
         val p = pickup?.takeUnless { it.status.ended } ?: return
         if (putting || !dirty) return
         dirty = false
         putting = true
         p.lastPushAt = now()
-        val json = Relay.carJson(p, People.loadCar(this))
+        val car = People.loadCar(this)
+        val jobs = p.members.withIndex().filter { !it.value.out }.map { (i, m) -> Triple(i, m, Relay.carJson(p, m, car, calling(p, m))) }
         io.execute {
-            val code = relay.putCar(p.id, p.key, json)
+            val codes = jobs.map { (i, m, json) -> i to relay.putCar(m.id, m.key, json) }
             main.post {
                 putting = false
                 if (pickup !== p) return@post
-                serverDown = code == -1
-                when (code) {
-                    204 -> flush() // 보내는 사이 바뀐 것
-                    404 -> handle(Event.Gone)
-                    409 -> io.execute { // 끝 상태가 서버에 있다(예: 공유 끄기). 다시 읽어 그 상태로 끝낸다
-                        val (c, r) = relay.get(p.id, p.key)
-                        main.post { if (pickup === p) if (r != null) handle(r) else if (c == 404) handle(Event.Gone) }
-                    }
+                serverDown = codes.any { it.second == -1 }
+                for ((i, code) in codes) when (code) {
+                    404 -> handle(Event.Gone(i))
+                    409 -> regain(p, i) // 끝 상태가 서버에 있다(예: 공유 끄기). 다시 읽어 그 상태로 끝낸다
                     -1, in 500..599 -> dirty = true // 다음 poll에서 최신 상태로 다시
                 }
+                if (codes.none { it.second == -1 || it.second in 500..599 }) flush() // 보내는 사이 바뀐 것
                 onUpdate?.invoke()
             }
         }
     }
 
+    private fun regain(p: Pickup, i: Int) {
+        val m = p.members[i]
+        io.execute {
+            val (c, r) = relay.get(m.id, m.key, i)
+            main.post { if (pickup === p) if (r != null) handle(r) else if (c == 404) handle(Event.Gone(i)) }
+        }
+    }
+
     /** 끝 상태는 서버가 받을 때까지(204, 이미 끝났으면 409, 지워졌으면 404) 하나씩 다시 보낸다 */
     private fun sendEnds() {
-        val p = unsentEnds.firstOrNull() ?: return
+        val e = unsentEnds.firstOrNull() ?: return
         if (endSending) return
         endSending = true
-        val json = Relay.carJson(p, null)
         io.execute {
-            val code = relay.putCar(p.id, p.key, json)
+            val code = relay.putCar(e.id, e.key, e.json)
             main.post {
                 endSending = false
-                if (code == 204 || code == 409 || code == 404) { unsentEnds.remove(p); sendEnds() }
+                if (code == 204 || code == 409 || code == 404) { unsentEnds.remove(e); sendEnds() }
             }
         }
     }
@@ -316,11 +389,21 @@ class PickupService : Service() {
         runCatching { tts?.speak(text, true) }.onFailure { Log.w(TAG, "TTS 발화 실패", it) }
     }
 
-    /** research R4: 권한을 먼저 보고, 되면 말하고 2초 뒤 placeCall. 안 되면 "폰으로 알렸어요" 한 줄 */
+    /**
+     * research R4: 권한을 먼저 보고, 되면 말하고 2초 뒤 placeCall. 안 되면 "폰으로 알렸어요" 한 줄.
+     * 3차: 한 일을 그 사람의 phoned로 남기고, 60초 뒤 전화 띠가 꺼진 값을 한 번 더 올린다
+     */
     private fun callOrNotify(a: Action.CallOrNotify) {
-        val notified = "${a.name}님 폰으로 알렸어요"
-        if (checkSelfPermission(Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-            if (a.speak) speak(notified)
+        val p = pickup
+        val can = checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
+        val m = p?.members?.getOrNull(a.who)
+        m?.phoned = can
+        if (p != null) {
+            push() // 같은 걸음에서 이 전화보다 먼저 나간 Push는 전화 띠가 꺼진 값이었다(코드 리뷰 반영)
+            main.postDelayed({ if (pickup === p && !p.status.ended) { push(); onUpdate?.invoke() } }, CALLING_MS)
+        }
+        if (!can) {
+            if (a.speak) speak("${a.name}님 폰으로 알렸어요")
             return
         }
         if (a.speak) speak("${a.name}님께 전화 걸게요")
@@ -328,9 +411,10 @@ class PickupService : Service() {
         main.postDelayed({
             try {
                 getSystemService(TelecomManager::class.java).placeCall(Uri.fromParts("tel", a.phone, null), Bundle())
-                Log.i(TAG, "전화 걸기 요청") // 번호는 로그에 남기지 않는다
+                Log.i(TAG, "전화 걸기 요청") // 번호는 로그에 남기지 않는다. 주행 중 헤드업은 Pleos가 보이지 않아 두지 않는다(research R23)
             } catch (e: Exception) {
                 Log.w(TAG, "전화 걸기 실패", e) // 이미 "전화 걸게요"라고 했다. 음성 상한을 넘기지 않게 더 말하지 않는다
+                if (pickup === p && m != null) { m.phoned = false; push(); onUpdate?.invoke() } // 화면·페이지는 대체 알림으로
             }
         }, 2_000)
     }

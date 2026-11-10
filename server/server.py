@@ -41,7 +41,9 @@ pickups = {}  # id -> {"key", "carSeen", "endedAt", "state"}
 # 차가 올리는 필드와 타입(data-model §8). None은 "없음"이다
 CAR_FIELDS = {"status": str, "name": str, "car": dict, "pos": (dict, type(None)), "etaSec": (int, type(None)),
               "walkSec": (int, type(None)), "spots": list, "chosen": int, "offer": (dict, type(None)),
-              "outNow": bool, "crossOver": bool, "wrongSide": bool, "arrived": bool}
+              "outNow": bool, "crossOver": bool, "wrongSide": bool, "arrived": bool,
+              # 3차(specs/003-group-pickup contracts/api.md): 함께 타는 사람(위치 없음), 이 사람의 가는 방법, 운전자 전화 중
+              "group": list, "plan": (dict, type(None)), "calling": bool}
 PASSENGER_FIELDS = {"consent": bool, "lat": NUM, "lon": NUM, "acc": NUM, "ready": bool, "late": bool,
                     "boarded": bool, "stop": bool, "transit": str, "ack": bool}
 
@@ -64,6 +66,7 @@ def typed(body, fields):
 def fresh(name, car):
     return {"status": "link", "name": name, "car": car, "pos": None, "etaSec": None, "walkSec": None, "spots": [],
             "chosen": -1, "offer": None, "outNow": False, "crossOver": False, "wrongSide": False, "arrived": False,
+            "group": [], "plan": None, "calling": False,
             "passenger": {"consent": None, "lat": None, "lon": None, "ready": False, "late": False,
                           "boarded": False, "transit": None, "ack": False}}
 
@@ -221,7 +224,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def check():
-    """contracts/api.md 자체 점검 아홉 항목"""
+    """contracts/api.md 자체 점검 열 항목"""
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_port}"
@@ -313,8 +316,20 @@ def check():
     deep = b"[" * 16000 + b"]" * 16000
     assert raw_put(str(len(deep)), deep) == 400
 
+    # 10. 3차 필드: 타입 검사, 끝 상태 뒤에는 지워진다
+    pid5, key5 = make()
+    body = {"status": "going", "group": [{"name": "준호", "mode": "walk", "aboard": False, "out": False}],
+            "plan": {"mode": "transit", "line": "1호선", "stops": 1, "alightName": "화서역", "min": 12}, "calling": True}
+    assert call("PUT", f"/api/pickups/{pid5}/car", body, key=key5)[0] == 204
+    got = call("GET", f"/api/pickups/{pid5}")[1]
+    assert got["group"][0]["name"] == "준호" and got["plan"]["line"] == "1호선" and got["calling"] is True, got
+    assert call("PUT", f"/api/pickups/{pid5}/car", {"group": "준호"}, key=key5)[0] == 400
+    assert call("PUT", f"/api/pickups/{pid5}/car", {"calling": "yes"}, key=key5)[0] == 400
+    assert call("PUT", f"/api/pickups/{pid5}/car", {"status": "met"}, key=key5)[0] == 204
+    assert call("GET", f"/api/pickups/{pid5}")[1] == {"status": "met", "name": "민지"}
+
     srv.shutdown()
-    print("check: 아홉 항목 통과")
+    print("check: 열 항목 통과")
 
 
 if __name__ == "__main__":

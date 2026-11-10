@@ -22,10 +22,10 @@ class Relay(private val base: String = "http://10.0.2.2:8090") {
 
     fun putCar(id: String, key: String, json: JSONObject): Int = http("PUT", "/api/pickups/$id/car", json.toString(), key).first
 
-    fun get(id: String, key: String): Pair<Int, Event.Remote?> {
+    fun get(id: String, key: String, who: Int = 0): Pair<Int, Event.Remote?> {
         val (code, text) = http("GET", "/api/pickups/$id", null, key)
         if (code != 200 || text == null) return code to null
-        return code to runCatching { remote(JSONObject(text)) }.getOrNull()
+        return code to runCatching { remote(JSONObject(text), who) }.getOrNull()
     }
 
     private fun http(method: String, path: String, body: String?, key: String?): Pair<Int, String?> = try {
@@ -51,44 +51,66 @@ class Relay(private val base: String = "http://10.0.2.2:8090") {
         private fun carObj(c: Car?) = JSONObject().put("model", c?.model.orEmpty()).put("color", c?.color.orEmpty())
             .put("plate", c?.plate.orEmpty()).put("phone", c?.phone.orEmpty())
 
-        /** 서버 GET → 순수 이벤트(data-model §7 Remote). 끝 상태면 passenger가 없다 */
-        fun remote(j: JSONObject): Event.Remote {
+        /** 서버 GET → 순수 이벤트(data-model §7 Remote). 끝 상태면 passenger가 없다. who는 함께 태우기의 사람 순서(3차) */
+        fun remote(j: JSONObject, who: Int = 0): Event.Remote {
             val p = j.optJSONObject("passenger")
             fun bool(k: String) = p?.optBoolean(k, false) ?: false
             val consent = if (p == null || p.isNull("consent")) null else p.optBoolean("consent")
             val pos = if (p == null || p.isNull("lat") || p.isNull("lon")) null else LatLon(p.getDouble("lat"), p.getDouble("lon"))
             val transit = if (p == null || p.isNull("transit")) null else p.optString("transit")
-            return Event.Remote(j.optString("status"), consent, pos, bool("ready"), bool("late"), bool("boarded"), transit, bool("ack"))
+            return Event.Remote(j.optString("status"), consent, pos, bool("ready"), bool("late"), bool("boarded"), transit, bool("ack"), who)
         }
 
-        /** 픽업 → 서버에 올리는 값(data-model §8) */
-        fun carJson(p: Pickup, car: Car?): JSONObject {
+        /** 이 사람이 고른 지점(확정 전이면 1순위)까지 가는 방법: "walk" 또는 노선 이름, 지점이 없으면 "" */
+        private fun mode(p: Pickup, i: Int) = (p.spot ?: p.spots.firstOrNull())?.plans?.getOrNull(i)?.let { it.leg?.line ?: "walk" }.orEmpty()
+
+        /**
+         * 픽업 → 그 사람 기록에 올리는 값(1·2차 data-model §8, 3차 §5). 사람 값은 m의 것이다.
+         * 함께 태우기는 지점 시간·서 있을 곳·"k분 빨라요"를 m의 가는 방법으로 바꾸고, 다른 사람은 이름·방법·탑승만 보낸다(위치 없음)
+         */
+        fun carJson(p: Pickup, m: Member, car: Car?, calling: Boolean = false): JSONObject {
             val j = JSONObject().put("status", p.status.wire)
             if (p.status.ended) return j
-            j.put("name", p.person.name)
+            val i = p.members.indexOf(m)
+            val mine = p.spot?.plans?.getOrNull(i) // 가는 중 m의 가는 방법(함께 태우기)
+            j.put("name", m.person.name)
             j.put("car", carObj(car))
             val last = p.track.lastOrNull()
             j.put("pos", if (last == null || p.status == Status.LINK) JSONObject.NULL
             else JSONObject().put("lat", last.pos.lat).put("lon", last.pos.lon).put("heading", p.heading ?: JSONObject.NULL))
             j.put("etaSec", p.etaSec?.roundToInt() ?: JSONObject.NULL)
-            j.put("walkSec", if (p.status == Status.GOING && !p.transitAccepted) p.walkSec?.roundToInt() ?: JSONObject.NULL else JSONObject.NULL)
+            val walking = p.status == Status.GOING && !m.transitAccepted && mine?.leg == null
+            j.put("walkSec", if (walking) m.walkSec?.roundToInt() ?: JSONObject.NULL else JSONObject.NULL)
             j.put("spots", JSONArray().apply {
                 p.spots.forEach { s ->
+                    val pl = s.plans.getOrNull(i)
+                    // 페이지 "k분 빨라요"는 차 카드와 같은 값이어야 해서 차가 센 k를 보낸다(코드 리뷰 반영). 함께 태우기는 걸어서 건너야 하는 사람만
+                    val faster = if (pl == null) Pick.fasterMin(s) else if (pl.leg == null) Pick.fasterMin(s.copy(crossing = pl.crossing)) else null
                     put(JSONObject().put("name", s.line).put("reason", s.reason).put("lat", s.pos.lat).put("lon", s.pos.lon)
-                        .put("heading", s.heading).put("walkSec", s.walkSec.roundToInt()).put("meetSec", s.meetSec.roundToInt())
+                        .put("heading", s.heading).put("walkSec", (pl?.arriveSec ?: s.walkSec).roundToInt()).put("meetSec", s.meetSec.roundToInt())
                         .put("photo", s.landmark.photo ?: JSONObject.NULL)
-                        // 페이지 "k분 빨라요"는 차 카드와 같은 값이어야 해서 차가 센 k를 보낸다(코드 리뷰 반영)
-                        .put("fasterMin", Pick.fasterMin(s) ?: JSONObject.NULL)
-                        .put("standLine", s.standLine)
+                        .put("fasterMin", faster ?: JSONObject.NULL)
+                        .put("standLine", pl?.standLine ?: s.standLine)
                         .put("road", JSONArray().apply { s.road.forEach { put(JSONArray().put(it.lat).put(it.lon)) } }))
                 }
             })
             j.put("chosen", p.chosen)
-            j.put("offer", p.offer?.let {
+            j.put("offer", m.offer?.let {
                 JSONObject().put("line", it.leg.line).put("stops", it.leg.stops).put("alightName", it.leg.alight.name)
                     .put("gainMin", it.gainMin)
             } ?: JSONObject.NULL)
-            j.put("outNow", p.outNow).put("crossOver", p.crossOver).put("wrongSide", p.wrongSide).put("arrived", p.arrived)
+            j.put("plan", if (p.status != Status.GOING || mine == null) JSONObject.NULL
+            else mine.leg?.let { leg ->
+                JSONObject().put("mode", "transit").put("line", leg.line).put("stops", leg.stops).put("alightName", leg.alight.name)
+                    .put("min", minutes(mine.arriveSec))
+            } ?: JSONObject().put("mode", "walk"))
+            j.put("group", JSONArray().apply {
+                p.members.forEachIndexed { k, o ->
+                    if (o !== m) put(JSONObject().put("name", o.person.name).put("mode", mode(p, k)).put("aboard", o.aboard).put("out", o.out))
+                }
+            })
+            j.put("calling", calling)
+            j.put("outNow", m.outNow).put("crossOver", p.crossOver).put("wrongSide", m.wrongSide).put("arrived", p.arrived)
             return j
         }
     }

@@ -4,6 +4,8 @@
   python3 scripts/demo.py reset
   python3 scripts/demo.py opposite|transit|transit-small|handsfree|fallback|reverse|wrongside|stop|cancel|decline|nospot|tour
   python3 scripts/demo.py ack|arrive|continue|continue-cancel|continue-full      # 2차(specs/002-arrive-and-continue/quickstart.md)
+  python3 scripts/demo.py group|group-transit      # 3차 함께 태우기(specs/003-group-pickup/quickstart.md)
+  python3 scripts/demo.py waiting   # 3차: 알림 뒤 길가에 세우고(P) 연락 줄 링·통화 물결 보기
 
 먼저 할 것: 서버(python3 server/server.py), adb forward tcp:8088 tcp:8088, 브라우저의 Virtual Console 페이지 닫기.
 장면 좌표는 scripts/scenes.txt다(PickTest와 같이 읽는다).
@@ -22,8 +24,10 @@ ADB = os.environ.get("ADB", os.path.expanduser("~/Library/Android/sdk/platform-t
 VC, SRV = "http://127.0.0.1:8088", "http://127.0.0.1:8090"
 PKG, USER = "kr.skku.sameside", "10"
 HERE = os.path.dirname(os.path.abspath(__file__))
+# 3차 FR-071: 사람 다섯 명(번호는 가짜, 화면에는 가려서 보인다). 줄바꿈은 XML 문자 참조로 쓴다
+PEOPLE = [("민지", "01012345678", 0), ("준호", "01023456789", 0), ("서연", "01034567890", 0), ("할머니", "0311234567", 1), ("도윤", "01045678901", 0)]
 PEOPLE_XML = ("<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n<map>\n"
-              "    <string name=\"people\">민지\t01012345678\t0</string>\n"
+              "    <string name=\"people\">" + "&#10;".join(f"{n}\t{p}\t{c}" for n, p, c in PEOPLE) + "</string>\n"
               "    <string name=\"car\">그랜저\t흰색\t12가 3456\t01098765432</string>\n"
               "    <string name=\"navOwn\">시연대기</string>\n</map>\n")
 WAIT_SPOT = dict(lat=37.3002852, lon=126.9711778, name="시연대기")  # 2차 reset의 내비 목적지(공백 없이: adb shell이 공백에서 자른다)
@@ -280,6 +284,36 @@ def begin(scene, pick_from=None):
     return pid
 
 
+def begin_group(scene, names=("민지", "준호")):
+    """3차: 차를 자리에 두고(P) "여러 명 함께" → 이름 → "n명 함께 데리러 가기". 사람마다 링크 id를 이름 순서로 돌려준다"""
+    gear("Park")
+    geo(*pt(scene, "car"))
+    front()
+    tap("여러 명 함께")
+    for n in names:
+        tap(n)
+    tap(f"{len(names)}명 함께 데리러 가기")
+    wait_text(lambda t: t == "함께 데리러 가요", what="함께 링크")
+    found = {}
+    w, h = (int(v) for v in re.findall(r"(\d+)x(\d+)", adb("shell", "wm", "size"))[-1])
+    for _ in range(5):  # 카드가 화면 아래로 넘치면 오른쪽 칸을 밀어 올려 다시 읽는다
+        cur = None
+        for t in texts():
+            if t.endswith("님") and t[:-1] in names:
+                cur = t[:-1]
+            elif "/p/" in t and cur and cur not in found:
+                found[cur] = t.rsplit("/", 1)[1]
+        if len(found) == len(names):
+            break
+        adb("shell", "input", "swipe", str(w * 7 // 10), str(h * 3 // 4), str(w * 7 // 10), str(h // 4), "500")
+        time.sleep(1)
+    if len(found) != len(names):
+        raise SystemExit(f"함께 링크를 다 읽지 못했다: {sorted(found)}")
+    for n in names:
+        log(f"[{scene}] {n} 화면: {SRV.replace('127.0.0.1', 'localhost')}/p/{found[n]}?sim=1")
+    return [found[n] for n in names]
+
+
 def snap(name):
     """SHOT_DIR 환경 변수가 있으면 차 화면을 그 폴더에 저장한다(문서 캡처용)"""
     d = os.environ.get("SHOT_DIR")
@@ -482,8 +516,13 @@ def cont(mode="continue"):
     finish()
 
 
+PHONE = ("android.permission.CALL_PHONE", "android.permission.READ_PHONE_STATE")  # 같은 권한 묶음(전화)
+
+
 def fallback():
-    adb("shell", "pm", "revoke", "--user", USER, PKG, "android.permission.CALL_PHONE")  # 앱 프로세스가 죽는다
+    # 3차: READ_PHONE_STATE도 같은 묶음이라, 하나라도 허용돼 있으면 CALL_PHONE 요청이 창 없이 자동 허용된다. 둘 다 거둔다
+    for perm in PHONE:
+        adb("shell", "pm", "revoke", "--user", USER, PKG, perm)  # 앱 프로세스가 죽는다
     adb("shell", "am", "start", "--user", USER, "-n", f"{PKG}/.MainActivity")
     time.sleep(3)
     for t, *_ in screen():  # 다시 뜨는 권한 요청은 거절한다
@@ -493,7 +532,8 @@ def fallback():
     try:
         handsfree("fallback")
     finally:
-        adb("shell", "pm", "grant", "--user", USER, PKG, "android.permission.CALL_PHONE")
+        for perm in PHONE:
+            adb("shell", "pm", "grant", "--user", USER, PKG, perm)
 
 
 def reverse():
@@ -599,6 +639,156 @@ def nospot():
     finish()
 
 
+def answer(pids, done, **reply):
+    """서버 outNow가 켜진 사람은 바로 답한다(2차 ack 장면 방식). 전화가 걸리지 않아 음성 상한에 여유가 남는다"""
+    for pid in pids:
+        if pid not in done and (server(pid) or {}).get("outNow"):
+            done.add(pid)
+            assert passenger(pid, **reply) == 204
+            log(f"알림을 받고 답했다: {reply}")
+
+
+def group():
+    """3차 US1: 두 사람이 걸어서 세븐일레븐 앞에 모인다. 지점에서 문 → 조수석(민지) → 두 사람 '탔어요'(research R21)"""
+    pids = begin_group("group")
+    for pid, k in zip(pids, ("p1", "p2")):
+        share(pid, "group", k)
+    shown = confirm_first()
+    log("만날 곳 카드:", [t for t in shown if "앞" in t or "차가 오는 쪽" in t or "걸어서" in t or t.startswith("차 ") or "근처로" in t])
+    done = set()
+    gear("Drive")
+    t0 = devtime()
+    drive(route("group"), 30, lambda t, left: answer(pids, done, ack=True) or False)
+    board()
+    for pid in pids:
+        assert passenger(pid, boarded=True) == 204
+    gear("Park")
+    front()
+    wait_text(lambda t: t == "만났어요", timeout=20, what="'만났어요'")
+    log("만남 화면:", [t for t in texts() if "확정부터" in t or "근처로" in t])
+    log("운전자 음성:", spoken(t0))
+    log("서버:", [server(pid) for pid in pids])
+    finish()
+
+
+def group_transit():
+    """3차 US2: 두 사람 모두 1호선으로 화서역에 모여 약국 앞에서 탄다(data-model §6 움직임 네 단계)"""
+    sc = "group-transit"
+    pids = begin_group(sc)
+    for pid, k in zip(pids, ("p1", "p2")):
+        share(pid, sc, k)
+    shown = confirm_first()
+    log("만날 곳 카드:", [t for t in shown if "앞" in t or "차가 오는 쪽" in t or "1호선" in t or t.startswith("차 ") or "근처로" in t])
+    rail = [(float(a), float(b)) for a, b in SC[sc]["rail"]]
+    fast = [(float(a), float(b)) for a, b in SC[sc]["fast"]]
+
+    def move(pid, at, **more):
+        assert passenger(pid, lat=at[0], lon=at[1], **more) == 204
+
+    for pid in pids:  # 1. 확정 뒤 "알겠어요"와 성균관대역
+        move(pid, rail[0], transit="accept")
+    done, stage = set(), [0]
+    total = sum(meters(a, b) for a, b in zip(fast, fast[1:]))
+
+    def each_fast(t, left):  # 2. 80km 구간 1/3·2/3에서 1호선 위 다음 점
+        while stage[0] < 2 and total - left >= total * (stage[0] + 1) / 3:
+            stage[0] += 1
+            for pid in pids:
+                move(pid, rail[stage[0]])
+        answer(pids, done, ready=True)  # 4. 그 전이라도 알림을 받은 사람은 바로 "나와 있어요"
+        return False
+
+    gear("Drive")
+    t0 = devtime()
+    drive(fast, 80, each_fast)
+    for pid, k in zip(pids, ("meet1", "meet2")):  # 3. 30km 구간 시작: 약국 앞 인도와 "나와 있어요"
+        move(pid, pt(sc, k))
+        if pid not in done:
+            done.add(pid)
+            assert passenger(pid, ready=True) == 204
+    drive(route(sc), 30)
+    board()
+    for pid in pids:
+        assert passenger(pid, boarded=True) == 204
+    gear("Park")
+    front()
+    wait_text(lambda t: t == "만났어요", timeout=20, what="'만났어요'")
+    log("만남 화면:", [t for t in texts() if "확정부터" in t or "근처로" in t])
+    log("운전자 음성:", spoken(t0))
+    log("서버:", [server(pid) for pid in pids])
+    finish()
+
+
+def cut(points, done):
+    """points를 처음부터 done m 간 자리에서 자른 나머지 경로"""
+    acc = 0
+    for i, (a, b) in enumerate(zip(points, points[1:])):
+        L = meters(a, b)
+        if acc + L >= done:
+            k = (done - acc) / L if L else 0
+            return [(a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k)] + points[i + 1:]
+        acc += L
+    return points[-1:]
+
+
+def contact():
+    """연락 줄이 읽어 주는 상태(접근성 설명). 주행 중 앱이 가려져 있으면 빈 목록이다"""
+    return re.findall(r'content-desc="(민지님 [^"]*)"', adb("exec-out", "uiautomator", "dump", "/dev/tty"))
+
+
+def waiting():
+    """3차: 알림이 나가면 길가에 세우고(P) 기다린다. 앱이 보이는 동안 연락 줄이
+    호박색 링(남은 초) → 통화 중 초록 물결 → 나와 있어요로 바뀐다. 그 뒤 마저 가서 태운다"""
+    pid = begin("waiting", pick_from="handsfree")
+    share(pid, "handsfree")
+    confirm_first()
+    pts = route("handsfree")
+    total = sum(meters(a, b) for a, b in zip(pts, pts[1:]))
+    left = []
+
+    def each(t, rest):  # 알림이 나가면 그 자리에서 멈춘다
+        if (server(pid) or {}).get("outNow"):
+            left.append(rest)
+            return True
+        return False
+
+    gear("Drive")
+    t0 = devtime()
+    drive(pts, 30, each)
+    gear("Park")  # 알림이 나갔다. 길가에 세운다
+    front()
+    time.sleep(5)
+    log("세운 뒤 연락 줄:", contact())
+    snap("25-going-notified.png")
+    end = time.time() + 80
+    while time.time() < end and logtime("통화 중 true", t0) is None:
+        time.sleep(1)
+    time.sleep(5)
+    front()  # 통화 화면이 앞에 나와도 앱으로 돌아온다
+    time.sleep(2)
+    log("통화 중 연락 줄:", contact())
+    snap("26-going-calling.png")
+    time.sleep(8)
+    assert passenger(pid, ready=True) == 204  # 전화를 받고 나왔다
+    adb("shell", "input", "keyevent", "KEYCODE_ENDCALL")
+    time.sleep(5)
+    log("끊은 뒤 연락 줄:", contact())
+    snap("27-going-ready.png")
+    gear("Drive")
+    drive(cut(pts, total - left[0]), 40)
+    board()
+    gear("Park")
+    front()
+    wait_text(lambda t: t == "만났어요", timeout=20, what="'만났어요'")
+    t_note, t_say = logtime("알림 보냄", t0), logtime("말하기: 민지님께 전화 걸게요", t0)
+    t_call, t_in = logtime("전화 걸기 요청", t0), logtime("통화 중 true", t0)
+    show = lambda a, b: "없음" if a is None or b is None else f"{b - a:.1f}초"
+    log(f"알림 → '전화 걸게요' {show(t_note, t_say)}(60~62, handsfree와 같은 기준), 걸기 요청 {show(t_say, t_call)} 뒤, 걸기 → 통화 중 {show(t_call, t_in)}")
+    log("운전자 음성:", spoken(t0))
+    log("서버:", server(pid))
+    finish()
+
+
 def tour():
     reset()
     for f in (opposite, transit, handsfree):
@@ -613,7 +803,7 @@ if __name__ == "__main__":
           "handsfree": handsfree, "fallback": fallback, "reverse": reverse, "wrongside": wrongside, "stop": stop,
           "cancel": cancel, "decline": decline, "nospot": nospot, "tour": tour,
           "ack": ack, "arrive": arrive, "continue": cont, "continue-cancel": lambda: cont("continue-cancel"),
-          "continue-full": lambda: cont("continue-full")}.get(name)
+          "continue-full": lambda: cont("continue-full"), "group": group, "group-transit": group_transit, "waiting": waiting}.get(name)
     if fn is None:
         raise SystemExit(__doc__)
     fn()

@@ -14,6 +14,8 @@
     <uses-permission android:name="pleos.car.permission.TTS_SERVICE" />
 
     <uses-permission android:name="android.permission.CALL_PHONE" />
+    <!-- 3차: 통화 중인지 보기(TelecomManager.isInCall, research R22) -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />

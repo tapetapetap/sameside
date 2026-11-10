@@ -317,20 +317,20 @@ class GoingTest {
 
     @Test fun callsOnceAtWalkPlusOneMinute() {
         val p = going() // 길 건너 서쪽: 걷는 시간 20.8m/67×60 + 60 = 78.6초 → 문턱 138.6초
-        assertEquals(78.6, p.walkSec!!, 0.5)
+        assertEquals(78.6, p.lead.walkSec!!, 0.5)
         val acts = north(p)
         val calls = acts.filter { it.second is Action.CallOrNotify }
         assertEquals(listOf(call), calls.map { it.second })
         // (거리×1.3+100)/10 ≤ 138.6 → 경유지까지 989m 안 → y ≥ -1089 → 출발 92초 뒤 알림, 2차: 그 60초 뒤 전화
         assertEquals(153_000L, calls[0].first)
-        assertTrue(p.called && p.outNow)
+        assertTrue(p.lead.called && p.lead.outNow)
         assertTrue(acts.any { it.first == 93_000L && it.second == Action.Push })
     }
 
     @Test fun thresholdIsAtLeastTwoMinutesAndFollowsNewPassengerPositions() {
         val p = going()
         Pick.step(Synth.all, p, remoteOf(at(20.0, 40.0)), 500) // 같은 편 42m: 걷는 시간 49초 → 문턱 120초
-        assertEquals(55.2 / 67 * 60, p.walkSec!!, 0.5)
+        assertEquals(55.2 / 67 * 60, p.lead.walkSec!!, 0.5)
         val calls = north(p).filter { it.second is Action.CallOrNotify }
         assertEquals(167_000L, calls.single().first) // 경유지까지 846m 안 → y ≥ -946 → 출발 106초 뒤 알림 + 60초
     }
@@ -340,7 +340,7 @@ class GoingTest {
         val first = Pick.step(Synth.all, p, remoteOf(at(-10.0, 0.0), ready = true), 500)
         assertEquals(listOf(Action.Speak("민지님이 나와 있어요")), first.filterIsInstance<Action.Speak>())
         val acts = north(p).map { it.second }
-        assertTrue(p.called)
+        assertTrue(p.lead.called)
         assertTrue(acts.none { it is Action.CallOrNotify || it == Action.Speak("민지님이 나와 있어요") })
     }
 
@@ -444,7 +444,7 @@ class GoingTest {
         assertEquals(Scenes.text("handsfree", "expect"), p.spots.first().landmark.id)
         Pick.step(DEMO, p, Event.Confirm(0), 0)
         Pick.step(DEMO, p, Event.Gear(false), 0)
-        assertEquals(walk, p.walkSec!!, 20.0)
+        assertEquals(walk, p.lead.walkSec!!, 20.0)
         val total = roadLength(o, route)
         var callAt: Double? = null
         var t = 0
@@ -468,18 +468,18 @@ class NotifyTest {
     private fun notified(): Pickup {
         val p = Synth.going()
         drive(Synth.all, p, 10.0, XY(0.0, -2000.0), XY(0.0, -1000.0))
-        assertEquals(93_000L, p.notifiedAt)
+        assertEquals(93_000L, p.lead.notifiedAt)
         return p
     }
 
     @Test fun thresholdOnlyNotifiesThenCallsOnceSixtySecondsLater() {
         val p = Synth.going()
         val acts = drive(Synth.all, p, 10.0, XY(0.0, -2000.0), XY(0.0, -20.0))
-        assertEquals(at(-10.0, 0.0), p.notifiedPos)
+        assertEquals(at(-10.0, 0.0), p.lead.notifiedPos)
         assertTrue(acts.any { it.first == 93_000L && it.second == Action.Push })
         assertTrue(acts.none { it.first == 93_000L && it.second is Action.Speak }) // 알림 단계에 운전자 음성은 없다
         assertEquals(listOf(153_000L to call), acts.filter { it.second is Action.CallOrNotify })
-        assertTrue(p.outNow && p.called)
+        assertTrue(p.lead.outNow && p.lead.called)
     }
 
     @Test fun tickAloneMeetsTheDeadline() {
@@ -494,7 +494,7 @@ class NotifyTest {
             val p = notified()
             Pick.step(Synth.all, p, answer, 110_000)
             assertTrue(Pick.step(Synth.all, p, Event.Tick, 153_000).none { it is Action.CallOrNotify })
-            assertTrue(p.called) // 다시 묻지 않는다
+            assertTrue(p.lead.called) // 다시 묻지 않는다
         }
     }
 
@@ -507,7 +507,7 @@ class NotifyTest {
     @Test fun onTransitMovingIsNotAnAnswer() {
         // 버스·지하철 안이면 늘 움직이므로 이동으로 반응을 보지 않는다(코드 리뷰 반영)
         val p = notified()
-        p.transitAccepted = true
+        p.lead.transitAccepted = true
         Pick.step(Synth.all, p, remoteOf(at(-10.0, 500.0), transit = "accept"), 110_000)
         assertEquals(listOf(call), Pick.step(Synth.all, p, Event.Tick, 153_000).filterIsInstance<Action.CallOrNotify>())
     }
@@ -516,7 +516,7 @@ class NotifyTest {
         val p = Synth.going()
         Pick.step(Synth.all, p, remoteOf(null), 500) // 위치가 끊겼다
         drive(Synth.all, p, 10.0, XY(0.0, -2000.0), XY(0.0, -1000.0))
-        assertNull(p.notifiedPos)
+        assertNull(p.lead.notifiedPos)
         Pick.step(Synth.all, p, remoteOf(at(-10.0, 100.0)), 110_000)
         assertEquals(listOf(call), Pick.step(Synth.all, p, Event.Tick, 153_000).filterIsInstance<Action.CallOrNotify>())
     }
@@ -525,8 +525,8 @@ class NotifyTest {
         val p = Synth.going()
         Pick.step(Synth.all, p, remoteOf(at(-10.0, 0.0), ready = true), 500)
         drive(Synth.all, p, 10.0, XY(0.0, -2000.0), XY(0.0, -20.0))
-        assertNull(p.notifiedAt)
-        assertFalse(p.outNow)
+        assertNull(p.lead.notifiedAt)
+        assertFalse(p.lead.outNow)
     }
 }
 
@@ -536,7 +536,7 @@ class WrongSideTest {
 
     @Test fun acrossTheRoadWithinThreeMinutesPushedOnlyWhenItChanges() {
         val p = Synth.going(passenger = XY(20.0, 40.0))
-        p.called = true // 전화의 Push와 섞이지 않게
+        p.lead.called = true // 전화의 Push와 섞이지 않게
         Pick.step(Synth.all, p, remoteOf(at(-15.0, 30.0)), 500) // 길 건너편 15m
         val pushes = mutableListOf<Long>()
         for (t in 0..150) {
@@ -545,11 +545,11 @@ class WrongSideTest {
             if (Action.Push in Pick.step(Synth.all, p, Event.CarPos(at(0.0, -2000.0 + 10 * t)), now)) pushes += now
         }
         assertEquals(listOf(61_000L), pushes) // (1300×1.3+100)/10 = 179초 ≤ 180
-        assertTrue(p.wrongSide)
+        assertTrue(p.lead.wrongSide)
         Pick.step(Synth.all, p, remoteOf(at(12.0, 20.0)), 200_000) // 지점 쪽으로 건넜다
         p.lastPushAt = 200_000
         assertTrue(Action.Push in Pick.step(Synth.all, p, Event.CarPos(at(0.0, -480.0)), 200_500))
-        assertFalse(p.wrongSide)
+        assertFalse(p.lead.wrongSide)
     }
 
     @Test fun afterCrossOverTheOtherCurbIsTheRightOne() {
@@ -558,10 +558,10 @@ class WrongSideTest {
         assertTrue(p.crossOver)
         Pick.step(Synth.all, p, remoteOf(at(-12.0, 20.0)), 300_000) // 안내대로 서쪽으로 건넜다
         Pick.step(Synth.all, p, Event.CarPos(at(0.0, 90.0)), 300_500)
-        assertFalse(p.wrongSide)
+        assertFalse(p.lead.wrongSide)
         Pick.step(Synth.all, p, remoteOf(at(12.0, 20.0)), 301_000) // 원래 지점 쪽에 남았다
         Pick.step(Synth.all, p, Event.CarPos(at(0.0, 80.0)), 301_500)
-        assertTrue(p.wrongSide)
+        assertTrue(p.lead.wrongSide)
     }
 
     @Test fun readyAndLateAreSaidOnceEach() {
@@ -612,7 +612,7 @@ class TransitTest {
         Pick.step(area(leg()), p, Event.CarPos(car), 0)
         Pick.step(area(leg()), p, remoteOf(passenger, status = "link"), 0)
         assertEquals(Status.SPOTS, p.status)
-        assertNotNull(p.offer)
+        assertNotNull(p.lead.offer)
         return p
     }
 
@@ -633,9 +633,9 @@ class TransitTest {
         assertEquals("station", acts.filterIsInstance<Action.SetNavi>().single().spot.landmark.id)
         assertEquals(0, p.chosen)
         assertTrue(Action.Speak("민지님이 버스 7번 타고 남쪽역으로 와요") in acts)
-        val walk = p.walkSec
+        val walk = p.lead.walkSec
         Pick.step(area(leg()), p, remoteOf(at(-20.0, 500.0), transit = "accept"), 2_000) // 버스 안
-        assertEquals(walk, p.walkSec)
+        assertEquals(walk, p.lead.walkSec)
         val calls = drive(area(leg()), p, 10.0, XY(0.0, -2900.0), XY(0.0, -1200.0), t0 = 3_000).filter { it.second is Action.CallOrNotify }
         assertEquals(3_000L + 156_000, calls.single().first) // (840×1.3+100)/10 = 119초 ≤ 120에서 알림, 60초 뒤 전화
     }
@@ -779,7 +779,7 @@ class EndTest {
 
     @Test fun goneExpiresAndEndedIgnoresEverything() {
         val p = Synth.going()
-        assertEquals(listOf(Action.ClearNavi, Action.End), Pick.step(Synth.all, p, Event.Gone, 1_000))
+        assertEquals(listOf(Action.ClearNavi, Action.End), Pick.step(Synth.all, p, Event.Gone(), 1_000))
         assertEquals(Status.EXPIRED, p.status)
         assertTrue(Pick.step(Synth.all, p, remoteOf(boarded = true), 2_000).isEmpty())
     }
@@ -830,7 +830,7 @@ class ArriveTest {
     /** (0, y)에 130_000에 와서 sec초 서 있는다. 깜빡이는 미리 넣는다(null이면 넣지 않음) */
     private fun standing(signal: Boolean?, sec: Int, y: Double = -30.0): Pair<Pickup, List<Action>> {
         val p = Synth.going(passenger = XY(20.0, 40.0))
-        p.called = true // 알림·전화와 섞이지 않게
+        p.lead.called = true // 알림·전화와 섞이지 않게
         signal?.let { Pick.step(Synth.all, p, Event.TurnSignal(it), 99_000) }
         val acts = drive(Synth.all, p, 10.0, XY(0.0, y - 300), XY(0.0, y), t0 = 100_000).map { it.second }.toMutableList()
         for (k in 1..sec) acts += Pick.step(Synth.all, p, Event.CarPos(at(0.0, y)), 130_000L + k * 1_000)
@@ -853,14 +853,14 @@ class ArriveTest {
     @Test fun onlyOnTheSpotRoadEitherWay() {
         // 옆길 신호 대기(지점 길로 꺾으려고 오른쪽 깜빡이)는 도착이 아니다(코드 리뷰 반영)
         val side = Synth.going(passenger = XY(20.0, 40.0))
-        side.called = true
+        side.lead.called = true
         Pick.step(Synth.all, side, Event.TurnSignal(true), 99_000)
         val acts = drive(Synth.all, side, 10.0, XY(-330.0, 30.0), XY(-30.0, 30.0), t0 = 100_000).map { it.second }.toMutableList()
         for (k in 1..6) acts += Pick.step(Synth.all, side, Event.CarPos(at(-30.0, 30.0)), 130_000L + k * 1_000)
         assertTrue(acts.none { it == ask })
         // 반대 방향으로 지점 길에 섰다(건너편 도착, 위임 결정 D1): 묻는다
         val back = Synth.going(passenger = XY(20.0, 40.0))
-        back.called = true
+        back.lead.called = true
         Pick.step(Synth.all, back, Event.TurnSignal(true), 99_000)
         val b = drive(Synth.all, back, 10.0, XY(0.0, 330.0), XY(0.0, 30.0), t0 = 100_000).map { it.second }.toMutableList()
         for (k in 1..6) b += Pick.step(Synth.all, back, Event.CarPos(at(0.0, 30.0)), 130_000L + k * 1_000)
