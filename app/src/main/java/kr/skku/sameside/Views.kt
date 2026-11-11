@@ -754,3 +754,91 @@ class ContactRow(context: Context, private val name: String, private val read: (
         }
     }
 }
+
+/* ---------- 5차 구간 그림(specs/005-chain-pickup contracts/ui.md §3, research R48) ---------- */
+
+/**
+ * 노드 x(data-model §5): 계획 시간 비례(합이 0이면 같은 간격). 이웃 간격이 minGap보다 작으면 오른쪽으로 밀고,
+ * 끝이 x1을 넘으면 오른쪽부터 당긴다. 그래도 안 되면 같은 간격. 첫 값은 x0, 끝 값은 x1이다
+ */
+fun chainXs(times: List<Double>, x0: Float, x1: Float, minGap: Float): List<Float> {
+    val n = times.size
+    val even = List(n + 1) { x0 + (x1 - x0) * it / n }
+    val total = times.sum()
+    if (total <= 0) return even
+    val xs = MutableList(n + 1) { x0 }
+    var acc = 0.0
+    for (k in 1..n) { acc += times[k - 1]; xs[k] = x0 + ((x1 - x0) * acc / total).toFloat() }
+    for (k in 1..n) xs[k] = maxOf(xs[k], xs[k - 1] + minGap)
+    if (xs[n] > x1) { xs[n] = x1; for (k in n - 1 downTo 1) xs[k] = minOf(xs[k], xs[k + 1] - minGap) }
+    return if (xs[1] - x0 < minGap) even else xs
+}
+
+/** 구간 그림의 지점 노드: 첫 사람 색 번호, 이름("민지·준호"), 그 지점 사람이 모두 탔는지 */
+class ChainNode(val slot: Int, val name: String, val done: Boolean)
+
+/**
+ * 출발 → 지점들 → 목적지(있으면)의 가로 줄. planSec은 구간마다 계획 시간(노드 자리), shownMin은 구간 위에 쓸 분(지난 구간은 null),
+ * current는 지금 가는 지점 번호(고를 때 −1). 움직이는 효과는 없다
+ */
+class ChainStrip(context: Context, private val nodes: List<ChainNode>, private val planSec: List<Double>,
+                 private val shownMin: List<Int?>, private val current: Int) : View(context) {
+    private val hasDest = planSec.size > nodes.size // 목적지 구간이 있으면 구간이 지점보다 하나 많다
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val label = textPaint(700).apply { textAlign = Paint.Align.CENTER }
+    private val mins = textPaint(500).apply { textAlign = Paint.Align.CENTER }
+    private val initial = textPaint(700).apply { textAlign = Paint.Align.CENTER }
+    private val labels = nodes.map { it.name } + listOfNotNull(if (hasDest) "목적지" else null)
+
+    init {
+        tag = "chain ${nodes.joinToString(";") { "${it.slot},${it.name},${it.done}" }} ${shownMin.joinToString(",")} $current"
+        contentDescription = "차례: " + labels.zip(shownMin).joinToString(", ") { (n, m) -> if (m == null) n else "$n ${m}분" }
+    }
+
+    override fun onMeasure(w: Int, h: Int) = setMeasuredDimension(getDefaultSize(suggestedMinimumWidth, w), dp(120f).toInt())
+
+    private fun color(id: Int) = context.getColor(id)
+
+    override fun onDraw(c: Canvas) {
+        label.textSize = sp(22f); label.color = color(R.color.text1)
+        mins.textSize = sp(22f); mins.color = color(R.color.text3)
+        initial.textSize = sp(14f); initial.color = color(R.color.on_accent)
+        val widths = labels.map { label.measureText(it) }
+        val xs = chainXs(planSec, dp(28f), width - maxOf(dp(28f), widths.last() / 2 + dp(8f)), widths.max() + dp(16f))
+        val y = dp(58f)
+        stroke.strokeWidth = dp(4f)
+        for (k in planSec.indices) { // 선: 지난 구간(지금 지점 앞까지)은 회색
+            stroke.color = color(if (current >= 0 && k < current) R.color.line else R.color.blue)
+            c.drawLine(xs[k], y, xs[k + 1], y, stroke)
+            shownMin[k]?.let { c.drawText("${it}분", (xs[k] + xs[k + 1]) / 2, dp(40f), mins) }
+        }
+        fill.color = color(R.color.blue) // 출발: 파란 원과 흰 화살표
+        c.drawCircle(xs[0], y, dp(14f), fill)
+        fill.color = color(R.color.on_accent)
+        c.drawPath(Path().apply { moveTo(xs[0] - dp(4f), y - dp(6f)); lineTo(xs[0] + dp(6f), y); lineTo(xs[0] - dp(4f), y + dp(6f)); close() }, fill)
+        nodes.forEachIndexed { k, n ->
+            val x = xs[k + 1]
+            if (k == current) { stroke.color = color(R.color.blue); stroke.strokeWidth = dp(3f); c.drawCircle(x, y, dp(19f), stroke) }
+            fill.color = color(R.color.on_accent)
+            c.drawCircle(x, y, dp(16f), fill)
+            fill.color = color(if (n.done) R.color.green else AVATAR_LINES[n.slot])
+            c.drawCircle(x, y, dp(13f), fill)
+            if (n.done) context.getDrawable(R.drawable.ic_check)?.mutate()?.let { d ->
+                d.setTint(color(R.color.on_accent))
+                val r = dp(8f).toInt()
+                d.setBounds(x.toInt() - r, y.toInt() - r, x.toInt() + r, y.toInt() + r)
+                d.draw(c)
+            } else c.drawText(n.name.take(1), x, y - (initial.ascent() + initial.descent()) / 2, initial)
+            c.drawText(n.name, x, dp(104f), label)
+        }
+        if (hasDest) { // 목적지: 회색 원과 흰 점
+            val x = xs.last()
+            fill.color = color(R.color.text3)
+            c.drawCircle(x, y, dp(14f), fill)
+            fill.color = color(R.color.on_accent)
+            c.drawCircle(x, y, dp(6f), fill)
+            c.drawText("목적지", x, dp(104f), label)
+        }
+    }
+}

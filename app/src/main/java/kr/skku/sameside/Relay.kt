@@ -62,7 +62,8 @@ class Relay(private val base: String = "http://10.0.2.2:8090") {
         }
 
         /** 이 사람이 고른 지점(확정 전이면 1순위)까지 가는 방법: "walk" 또는 노선 이름, 지점이 없으면 "" */
-        private fun mode(p: Pickup, i: Int) = (p.spot ?: p.spots.firstOrNull())?.plans?.getOrNull(i)?.let { it.leg?.line ?: "walk" }.orEmpty()
+        private fun mode(p: Pickup, i: Int) = (if (p.chained) p.spots.getOrNull(p.members[i].stop) else p.spot ?: p.spots.firstOrNull())
+            ?.plans?.getOrNull(i)?.let { it.leg?.line ?: "walk" }.orEmpty()
 
         /**
          * 픽업 → 그 사람 기록에 올리는 값(1·2차 data-model §8, 3차 §5). 사람 값은 m의 것이다.
@@ -72,13 +73,14 @@ class Relay(private val base: String = "http://10.0.2.2:8090") {
             val j = JSONObject().put("status", p.status.wire)
             if (p.status.ended) return j
             val i = p.members.indexOf(m)
-            val mine = p.spot?.plans?.getOrNull(i) // 가는 중 m의 가는 방법(함께 태우기)
+            val mine = (if (p.chained) p.spots.getOrNull(m.stop) else p.spot)?.plans?.getOrNull(i) // 가는 중 m의 가는 방법(함께 태우기, 5차 차례면 자기 지점)
+            val here = !p.chained || m.stop == p.chosen // 5차: 지금 가는 지점이 이 사람 지점
             j.put("name", m.person.name)
             j.put("car", carObj(car))
             val last = p.track.lastOrNull()
             j.put("pos", if (last == null || p.status == Status.LINK) JSONObject.NULL
             else JSONObject().put("lat", last.pos.lat).put("lon", last.pos.lon).put("heading", p.heading ?: JSONObject.NULL))
-            j.put("etaSec", p.etaSec?.roundToInt() ?: JSONObject.NULL)
+            j.put("etaSec", Pick.memberEta(p, i)?.roundToInt() ?: JSONObject.NULL) // 5차 차례면 이 사람까지(research R47)
             val walking = p.status == Status.GOING && !m.transitAccepted && mine?.leg == null
             j.put("walkSec", if (walking) m.walkSec?.roundToInt() ?: JSONObject.NULL else JSONObject.NULL)
             j.put("spots", JSONArray().apply {
@@ -94,7 +96,7 @@ class Relay(private val base: String = "http://10.0.2.2:8090") {
                         .put("road", JSONArray().apply { s.road.forEach { put(JSONArray().put(it.lat).put(it.lon)) } }))
                 }
             })
-            j.put("chosen", p.chosen)
+            j.put("chosen", if (p.chained) m.stop else p.chosen)
             j.put("offer", m.offer?.let {
                 JSONObject().put("line", it.leg.line).put("stops", it.leg.stops).put("alightName", it.leg.alight.name)
                     .put("gainMin", it.gainMin)
@@ -110,7 +112,9 @@ class Relay(private val base: String = "http://10.0.2.2:8090") {
                 }
             })
             j.put("calling", calling)
-            j.put("outNow", m.outNow).put("crossOver", p.crossOver).put("wrongSide", m.wrongSide).put("arrived", p.arrived)
+            val gone = p.chained && m.aboard // 5차: 앞 지점에서 이미 탔다
+            j.put("outNow", m.outNow && !gone).put("crossOver", p.crossOver && here).put("wrongSide", m.wrongSide && here && !gone)
+                .put("arrived", p.arrived && here)
             return j
         }
     }

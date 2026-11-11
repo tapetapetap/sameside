@@ -61,6 +61,8 @@ object Rules {
     const val STOP_SEC = 60.0 // 근처로 데리러 가기 어림: 들를 때마다(FR-055)
     const val NEARBY_GAP_SEC = 60.0 // 근처 어림이 함께 만나는 시간보다 이만큼 넘게 늦을 때만 보인다(FR-055)
     const val OUR_CALL_MS = 30_000L // 앱이 건 전화 뒤 이만큼 안에 시작된 통화만 그 사람과의 통화로 본다(코드 리뷰 반영)
+    // 5차(specs/005-chain-pickup research R43)
+    const val ROAD_KMH = 40.0 // 마지막 지점 → 원래 목적지 어림 속도
 }
 
 /* ---------- 기하(data-model §3). 원점 o를 기준으로 m 단위 평면(x 동쪽, y 북쪽)에서 계산한다 ---------- */
@@ -180,6 +182,12 @@ data class Plan(val leg: TransitLeg?, val walkM: Double, val arriveSec: Double, 
 
 data class Fix(val pos: LatLon, val at: Long)
 
+/** 5차 차례의 한 지점(data-model §1). who = members 번호. Area.kt의 Stop(정류장)과 다른 이름이다 */
+data class ChainStop(val spot: Spot, val who: List<Int>)
+
+/** legs[0] = 차 → 첫 지점, legs[k] = 앞 지점 → k번째 지점(들르는 60초 포함). destSec = 마지막 지점 → 목적지(없으면 null) */
+data class Chain(val stops: List<ChainStop>, val legs: List<Double>, val destSec: Double?)
+
 class Passenger {
     var consent: Boolean? = null
     var pos: LatLon? = null
@@ -206,6 +214,7 @@ class Member(val person: Person, val id: String, val key: String) {
     var phoned: Boolean? = null // 서비스가 한 일: true 전화, false 폰으로 알림
     var aboard = false // 페이지 "탔어요"(함께 태우기)
     var out = false // 빠짐(FR-059)
+    var stop = -1 // 5차: 차례에서 이 사람 지점 번호(spots와 chain.stops의 같은 번호)
 }
 
 class Pickup(val members: List<Member>, now: Long) {
@@ -252,6 +261,10 @@ class Pickup(val members: List<Member>, now: Long) {
     var metAt: Long? = null
     var nearbySec: Double? = null // 고를 때 1순위 기준으로 센 근처 어림(비교 줄이 있을 때만). 1순위가 아닌 곳을 확정하면 지운다
     var lastLeft: Member? = null // 함께 태우기를 끝낸 마지막 빠짐(끝 화면 이름)
+    // 5차
+    var chain: Chain? = null // 고를 때 만든 차례 계획. 확정 뒤에는 빈 지점을 지울 때만 바뀐다
+    var chained = false // 차례로 확정함
+    var destPos: LatLon? = null // 내비 원래 목적지(research R44)
 
     val spot get() = spots.getOrNull(chosen)
 
@@ -331,6 +344,8 @@ sealed interface Event {
     data class TurnSignal(val right: Boolean) : Event
     data class Arrive(val send: Boolean) : Event
     data class Route(val next: String?, val lost: String?) : Event
+    data object ConfirmChain : Event // 5차: "차례로 태울게요"
+    data class Dest(val pos: LatLon?) : Event // 5차: 내비 원래 목적지 좌표(앱이 넣은 지점이면 null)
 }
 
 sealed interface Action {
@@ -346,6 +361,7 @@ sealed interface Action {
 object Pick {
     private const val PICK_MPS = Rules.PICK_KMH / 3.6
     private const val MIN_MPS = Rules.MIN_KMH / 3.6
+    private const val ROAD_MPS = Rules.ROAD_KMH / 3.6
 
     /* ---------- 지점 고르기(data-model §4) ---------- */
 
@@ -402,7 +418,7 @@ object Pick {
         val o = area.center
         val limit = if (careful) Rules.WALK_M_CAREFUL else Rules.WALK_M
         val walkM = dist(o, pos, s.pos) * Rules.DETOUR
-        if (walkM <= limit) return walk(area, pos, s).let { (sec, c) -> Plan(null, walkM, sec, c, standLine(area, s, pos)) }
+        if (walkM <= limit) return walkPlan(area, s, pos)
         return area.transit.mapNotNull { t ->
             val d1 = dist(o, pos, t.board.pos) * Rules.DETOUR
             val d2 = dist(o, t.alight.pos, s.pos) * Rules.DETOUR
@@ -411,6 +427,10 @@ object Pick {
             Plan(t, d1 + d2, d1 / Rules.WALK_M_PER_MIN * 60.0 + t.waitSec + t.rideSec + sec, c, standLine(area, s, t.alight.pos))
         }.minByOrNull { it.arriveSec }
     }
+
+    /** 걸어서 가는 방법(한도를 보지 않는다). 5차 차례는 늘 자기 1순위까지 걷는다 */
+    private fun walkPlan(area: Area, s: Spot, pos: LatLon) =
+        walk(area, pos, s).let { (sec, c) -> Plan(null, dist(area.center, pos, s.pos) * Rules.DETOUR, sec, c, standLine(area, s, pos)) }
 
     /**
      * 모두 갈 수 있는 같은 편 지점(FR-052). people[i]가 null이면 빠진 사람, Boolean은 가까이만.
@@ -447,6 +467,38 @@ object Pick {
             at = l.pos
         }
         return sec
+    }
+
+    /**
+     * 차례 계획(5차 data-model §1): 사람마다 한 명 픽업 1순위, 같은 곳은 한 지점, 차에서 가까운 곳부터 앞 지점에서 가까운 곳 차례.
+     * 1순위가 없는 사람이 있거나 지점이 2곳 미만이면 null
+     */
+    // ponytail: 욕심 방식. 3명까지라 모든 순서(6가지)도 볼 수 있지만 시연 지역에서는 같다(research R42)
+    fun chain(area: Area, car: LatLon, people: List<Pair<LatLon, Boolean>?>, dest: LatLon?): Chain? {
+        val o = area.center
+        val firsts = people.mapIndexedNotNull { i, q -> q?.let { (pos, careful) -> i to (choose(area, car, pos, careful).firstOrNull() ?: return null) } }
+        val left = firsts.groupBy { it.second.landmark.id }.values.map { g -> ChainStop(g[0].second, g.map { it.first }) }.toMutableList()
+        if (left.size < 2) return null
+        val stops = mutableListOf<ChainStop>()
+        var at = car
+        while (left.isNotEmpty()) {
+            val next = left.minBy { dist(o, at, it.spot.pos) }
+            left -= next; stops += next; at = next.spot.pos
+        }
+        val legs = listOf(stops[0].spot.carSec) + stops.zipWithNext { a, b -> dist(o, a.spot.pos, b.spot.pos) * Rules.DETOUR / PICK_MPS + Rules.STOP_SEC }
+        return Chain(stops, legs, toDest(o, stops.last().spot.pos, dest))
+    }
+
+    private fun toDest(o: LatLon, last: LatLon, dest: LatLon?) = dest?.let { dist(o, last, it) * Rules.DETOUR / ROAD_MPS }
+
+    /** 사람별 남은 시간(5차 data-model §4). 차례가 아니면 p.etaSec, 탔거나 지난 지점이면 null */
+    fun memberEta(p: Pickup, i: Int): Double? {
+        val m = p.members[i]
+        val c = p.chain
+        if (!p.chained || c == null) return p.etaSec
+        val eta = p.etaSec ?: return null
+        if (m.aboard || m.stop < p.chosen) return null
+        return eta + (p.chosen + 1..m.stop).sumOf { c.legs[it] }
     }
 
     /** 남은 거리 막대(FR-069): 1 − 지금 남은 거리 / 확정 때 남은 거리. 확정 때 차 위치가 없었으면 null */
@@ -606,19 +658,33 @@ object Pick {
             is Event.Confirm -> {
                 val s = p.spots.getOrNull(e.index)
                 if (p.status == Status.SPOTS && p.park == true && s != null) {
-                    p.chosen = e.index
                     // 함께 태우기는 걷는 사람만 걷는 시간이 있다(대중교통 탈 사람은 2분 문턱)
                     if (p.group) p.members.forEachIndexed { i, m -> m.walkSec = s.plans.getOrNull(i)?.takeIf { it.leg == null }?.arriveSec }
                     else p.lead.walkSec = s.walkSec
-                    p.etaSec = remaining(area.center, p.track, s, false, now) // 서 있는 동안 위치가 안 와도 남은 시간을 보인다
-                    p.status = Status.GOING
-                    p.expireAt = now + (s.carSec * 1000).toLong() + Rules.GOING_EXTRA_MS
+                    if (e.index != 0 || p.chain != null) p.nearbySec = null // 근처 어림은 1순위와 견준 값이다. 5차: 계획이 있으면 카드에서 숨겼다
                     p.confirmedAt = now
-                    p.startM = p.track.lastOrNull()?.let { left(area.center, it.pos, s, false) }
-                    if (e.index != 0) p.nearbySec = null // 근처 어림은 1순위와 견준 값이다
-                    out += Action.SetNavi(s)
-                    out += Action.Push
+                    go(area, p, e.index, now, out)
                 }
+            }
+            Event.ConfirmChain -> {
+                val c = p.chain
+                if (p.status == Status.SPOTS && p.park == true && c != null) {
+                    // 지점마다 그 지점 사람의 걷기 plan(3차)을 둔다. 합친 지점에서도 서 있을 곳·건너기가 사람마다다
+                    p.spots = c.stops.map { st ->
+                        st.spot.copy(plans = p.members.mapIndexed { i, m -> m.passenger.pos?.takeIf { i in st.who }?.let { walkPlan(area, st.spot, it) } })
+                    }
+                    c.stops.forEachIndexed { k, st -> st.who.forEach { p.members[it].stop = k } }
+                    p.members.forEachIndexed { i, m -> m.walkSec = p.spots.getOrNull(m.stop)?.plans?.getOrNull(i)?.arriveSec }
+                    p.chained = true
+                    p.nearbySec = null // 만남 화면의 3차 비교 줄을 끈다
+                    p.confirmedAt = now
+                    go(area, p, 0, now, out)
+                }
+            }
+            is Event.Dest -> if (!p.chained) { // 확정 뒤에는 바꾸지 않는다(목적지 방식이면 내비 목적지가 지점이 된다, research R44)
+                p.destPos = e.pos
+                // 만날 곳에서는 목적지 구간만 다시 센다(카드 순서·만료는 그대로). 한 명 픽업은 값만
+                p.chain = p.chain?.let { it.copy(destSec = toDest(area.center, it.stops.last().spot.pos, e.pos)) }
             }
             is Event.Door -> when {
                 e.area == Rules.DRIVER_DOOR -> Unit
@@ -667,6 +733,39 @@ object Pick {
         return out.distinct() // 한 이벤트에서 Push가 여러 번 나와도 한 번만 올린다
     }
 
+    /** 확정·넘어가기 공통: 그 지점으로 가는 중이 된다(남은 시간·만료·막대 기준을 그 지점으로) */
+    private fun go(area: Area, p: Pickup, index: Int, now: Long, out: MutableList<Action>) {
+        val s = p.spots[index]
+        p.chosen = index
+        p.etaSec = remaining(area.center, p.track, s, false, now) // 서 있는 동안 위치가 안 와도 남은 시간을 보인다
+        p.status = Status.GOING
+        p.expireAt = now + (s.carSec * 1000).toLong() + Rules.GOING_EXTRA_MS
+        p.startM = p.track.lastOrNull()?.let { left(area.center, it.pos, s, false) }
+        out += Action.SetNavi(s)
+        out += Action.Push
+    }
+
+    /** 5차: 다음 지점으로 넘어간다(research R45). 지점 값은 처음으로, 탄 자리 수는 그대로(운전 내내 누적), 음성 셈은 지점마다 */
+    private fun advance(area: Area, p: Pickup, spoken: String, next: Int, now: Long, out: MutableList<Action>) {
+        p.passedWaypoint = false; p.spoke150 = false; p.reached = false; p.doorCycledNearSpot = false
+        p.arriveAsked = false; p.arriveCard = false; p.arrived = false; p.crossOver = false
+        p.spokenWhileDriving = 0
+        go(area, p, next, now, out)
+        say(p, out, spoken + "다음은 ${names(p.active.filter { it.stop == next })}, ${p.spots[next].line}이에요")
+    }
+
+    /** 5차: 사람이 없는 지점 k를 차례에서 지우고 앞뒤 구간을 잇는다(들르는 1분은 한 번만, data-model §3) */
+    private fun dropStop(p: Pickup, k: Int) {
+        val c = p.chain ?: return
+        val legs = c.legs.toMutableList()
+        var dest = c.destSec
+        if (k + 1 < legs.size) legs[k + 1] = legs[k] + legs[k + 1] - Rules.STOP_SEC else dest = dest?.let { legs[k] + it - Rules.STOP_SEC }
+        legs.removeAt(k)
+        p.chain = Chain(c.stops.filterIndexed { i, _ -> i != k }, legs, dest)
+        p.spots = p.spots.filterIndexed { i, _ -> i != k }
+        p.members.forEach { if (it.stop > k) it.stop-- }
+    }
+
     /** going에서 끝나면 어떤 끝이든 앱이 내비에 넣은 것을 지운다(경유지가 원래 길이나 다음 픽업에 남지 않게) */
     private fun end(p: Pickup, s: Status, out: MutableList<Action>) {
         if (p.status == Status.GOING) out += Action.ClearNavi
@@ -695,8 +794,18 @@ object Pick {
     private fun board(area: Area, p: Pickup, now: Long, out: MutableList<Action>) {
         if ((p.status != Status.GOING && p.status != Status.NOSPOT) || p.active.isEmpty()) return
         val seats = if (p.doorCycledNearSpot && stopped(area.center, p.track, now)) p.takenSeats.size else 0
-        if (max(seats, p.active.count { it.aboard }) >= p.active.size) met(p, now, out)
+        // 5차 차례: 지금 지점까지 태울 사람(research R46). 빈자리 수는 운전 내내 누적이라 앞 지점 사람과 함께 센다
+        val due = if (p.chained) p.active.filter { it.stop <= p.chosen } else p.active
+        if (max(seats, due.count { it.aboard }) < due.size) return
+        val next = nextStop(p, p.chosen + 1)
+        if (!p.chained || next == null) return met(p, now, out)
+        val here = due.filter { it.stop == p.chosen }
+        due.forEach { it.aboard = true } // 착좌로만 탄 사람도 탄 사람이다(줄 체크, 연락 줄, 페이지, 전화 거르기)
+        advance(area, p, "${names(here)}이 탔어요. ", next, now, out)
     }
+
+    /** 5차: from부터 아직 안 탄 사람이 있는 첫 지점(먼저 와서 탄 사람의 지점은 건너뛴다). 없으면 null */
+    private fun nextStop(p: Pickup, from: Int) = (from until p.spots.size).firstOrNull { k -> p.active.any { it.stop == k && !it.aboard } }
 
     /** 대중교통을 받아들임: 정류장 근처 지점 하나만 남긴다. 가는 중이면 내비를 바꾼다 */
     private fun accept(p: Pickup, offer: Offer, out: MutableList<Action>) {
@@ -727,14 +836,18 @@ object Pick {
             p.reached = dist(o, car, s.pos) <= Rules.LAST_SPOT_M
         }
         val waiting = p.members.withIndex().filter { !it.value.out && !it.value.aboard }
+        val here = if (p.chained) waiting.filter { it.value.stop == p.chosen } else waiting // 5차: 지금 지점 사람
 
         // 자동 전화(FR-016·017). 대중교통 탈 사람은 걷는 시간을 셀 수 없어 2분 기준이다.
         // 2차: 문턱에서는 페이지에 "지금 나오세요"만 보내고(운전자 음성 없음), 60초 안에 반응이 없을 때만 전화한다
+        // 5차 차례: 사람마다 자기 지점과 자기 남은 시간(memberEta). 길을 건너오라는 말(crossOver)은 지금 지점 사람에게만이다
         for ((i, m) in waiting) {
+            val ms = if (p.chained) p.spots[m.stop] else s
+            val mine = memberEta(p, i) ?: continue
             val threshold = if (rider(p, i)) Rules.CALL_MIN_SEC
-            else max((m.walkSec ?: s.walkSec) + Rules.CALL_BUFFER_SEC, Rules.CALL_MIN_SEC)
-            if (!m.called && m.notifiedAt == null && eta <= threshold) {
-                val isOut = m.passenger.ready || m.passenger.pos?.let { dist(o, it, s.pos) <= Rules.OUT_M && onCurb(area, p, s, it) } == true
+            else max((m.walkSec ?: ms.walkSec) + Rules.CALL_BUFFER_SEC, Rules.CALL_MIN_SEC)
+            if (!m.called && m.notifiedAt == null && mine <= threshold) {
+                val isOut = m.passenger.ready || m.passenger.pos?.let { dist(o, it, ms.pos) <= Rules.OUT_M && onCurb(area, ms, it, p.crossOver && ms === s) } == true
                 if (isOut) {
                     m.called = true
                     if (!m.readySpoken) { m.readySpoken = true; say(p, out, "${m.person.name}님이 나와 있어요") }
@@ -749,14 +862,14 @@ object Pick {
         }
 
         // 150m 한 줄(FR-019·020). 지점 길에 들어선 뒤에만 방향을 판정한다
-        if (!p.spoke150 && waiting.isNotEmpty()) {
+        if (!p.spoke150 && here.isNotEmpty()) {
             val d = dist(o, car, s.pos)
             val onRoad = project(o, area.road(s.landmark.roadId), car).distance <= Rules.ON_ROAD_M
             val diff = p.heading?.let { angleDiff(it, s.heading) }
             val cross = onRoad && diff != null && diff >= Rules.CROSS_DEG
             val line = when {
                 d > Rules.NEAR_SPOT_M -> null
-                cross -> "${names(waiting.map { it.value })}이 길을 건너 오른쪽으로 와요"
+                cross -> "${names(here.map { it.value })}이 길을 건너 오른쪽으로 와요"
                 onRoad && diff != null && diff <= Rules.RIGHT_DEG -> rightLine(area, s, car)
                 (onRoad && diff == null) || d <= Rules.LAST_SPOT_M -> "곧 ${s.landmark.name} 앞이에요"
                 else -> null // 꺾는 중이다. 방향이 정해질 때까지 기다린다
@@ -769,10 +882,10 @@ object Pick {
         }
 
         // 건너편 경고(FR-023). 음성은 없고 페이지 띠만 바뀐다. 올린 값과 다를 때만 올린다
-        for ((_, m) in waiting) {
+        for ((_, m) in here) {
             val pos = m.passenger.pos
             val wrong = eta <= Rules.WRONG_SIDE_SEC && pos != null &&
-                project(o, area.road(s.landmark.roadId), pos).distance <= Rules.CROSS_NEAR_M && !onCurb(area, p, s, pos)
+                project(o, area.road(s.landmark.roadId), pos).distance <= Rules.CROSS_NEAR_M && !onCurb(area, s, pos, p.crossOver)
             if (wrong != m.wrongSide) {
                 m.wrongSide = wrong
                 out += Action.Push
@@ -806,7 +919,7 @@ object Pick {
         if (diff != null && diff > Rules.RIGHT_DEG && diff < Rules.CROSS_DEG) return
         p.arriveAsked = true
         p.arriveCard = true
-        say(p, out, "${names(p.active.filter { !it.aboard })}께 도착했다고 알릴까요?")
+        say(p, out, "${names(p.active.filter { !it.aboard && (!p.chained || it.stop == p.chosen) })}께 도착했다고 알릴까요?")
     }
 
     /**
@@ -836,9 +949,9 @@ object Pick {
     private fun rider(p: Pickup, i: Int) = p.members[i].transitAccepted || p.spot?.plans?.getOrNull(i)?.leg != null
 
     /** 나와 있음·건너편 경고의 기준 길가: 지점 쪽. 길을 건너오라고 했으면(crossOver) 그 반대쪽 */
-    private fun onCurb(area: Area, p: Pickup, s: Spot, pos: LatLon): Boolean {
+    private fun onCurb(area: Area, s: Spot, pos: LatLon, crossOver: Boolean): Boolean {
         val side = sign(project(area.center, area.road(s.landmark.roadId), pos).offset)
-        return side == (if (p.crossOver) -sign(s.offset) else sign(s.offset))
+        return side == (if (crossOver) -sign(s.offset) else sign(s.offset))
     }
 
     /** 주행 중(P가 아님) 음성은 5줄까지다(FR-015) */
@@ -883,7 +996,7 @@ object Pick {
             return
         }
         m.passenger.apply { consent = e.consent; pos = e.pos; ready = e.ready; ack = e.ack }
-        val s = p.spot
+        val s = if (p.chained) p.spots.getOrNull(m.stop) else p.spot // 5차: 그 사람 지점
         val plan = s?.plans?.getOrNull(e.who)
         when (p.status) {
             Status.LINK -> {
@@ -914,6 +1027,7 @@ object Pick {
     /** 한 사람이 빠진다(FR-059). 남은 사람이 없으면 그 끝 상태로 끝내고, 확정 전이면 남은 사람으로 다시 고른다 */
     private fun leave(area: Area, p: Pickup, who: Int, ended: Status, now: Long, out: MutableList<Action>) {
         val m = p.members.getOrNull(who)?.takeUnless { it.out } ?: return
+        if (p.chained && m.aboard) return // 5차: 이미 탄 사람이 공유를 꺼도 차에 있다. 남은 지점까지 길어서 빠짐으로 보지 않는다
         m.out = true
         if (p.active.isEmpty()) {
             p.lastLeft = m
@@ -922,6 +1036,15 @@ object Pick {
             return
         }
         if (p.status == Status.GOING) {
+            val k = m.stop
+            if (p.chained && !m.aboard && p.active.none { it.stop == k }) { // 5차: 그 지점에 남은 사람이 없다
+                dropStop(p, k)
+                if (k == p.chosen) { // 지금 가던 지점이 비었다: 당겨진 다음 지점으로(음성 한 줄), 없으면 만남
+                    val next = nextStop(p, k)
+                    if (next != null) advance(area, p, "${m.person.name}님은 이번에 함께 타지 않아요. ", next, now, out) else met(p, now, out)
+                    return
+                }
+            }
             say(p, out, "${m.person.name}님은 이번에 함께 타지 않아요")
             out += Action.Push
             transitSaid(p, out) // 아직 "알겠어요" 전이던 사람이 빠지면 남은 사람은 모두 받아들인 것일 수 있다
@@ -939,7 +1062,8 @@ object Pick {
         p.nearbySec = p.spots.firstOrNull()?.takeIf { riders(it) > 0 }?.let { s ->
             nearby(area, car, people.filterNotNull())?.takeIf { it - s.meetSec > Rules.NEARBY_GAP_SEC }
         }
-        p.status = if (p.spots.isEmpty()) Status.NOSPOT else Status.SPOTS
+        p.chain = chain(area, car, people, p.destPos) // 5차
+        p.status = if (p.spots.isEmpty() && p.chain == null) Status.NOSPOT else Status.SPOTS
         p.expireAt = now + Rules.WAIT_MS
         out += Action.Push
     }

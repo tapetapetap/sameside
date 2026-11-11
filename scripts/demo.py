@@ -6,6 +6,7 @@
   python3 scripts/demo.py ack|arrive|continue|continue-cancel|continue-full      # 2차(specs/002-arrive-and-continue/quickstart.md)
   python3 scripts/demo.py group|group-transit      # 3차 함께 태우기(specs/003-group-pickup/quickstart.md)
   python3 scripts/demo.py waiting   # 3차: 알림 뒤 길가에 세우고(P) 연락 줄 링·통화 물결 보기
+  python3 scripts/demo.py chain     # 5차: 민지(세븐일레븐 앞) → 준호(화서역 4번 출구 앞) 차례로 태우기(specs/005-chain-pickup/quickstart.md)
 
 먼저 할 것: 서버(python3 server/server.py), adb forward tcp:8088 tcp:8088, 브라우저의 Virtual Console 페이지 닫기.
 장면 좌표는 scripts/scenes.txt다(PickTest와 같이 읽는다).
@@ -736,6 +737,59 @@ def group_transit():
     finish()
 
 
+def chain():
+    """5차 차례로 태우기: 내비에 원래 목적지 '집'을 넣고(경유지 방식, research R44) 민지 → 준호 차례로 태운다.
+    민지는 알림에 '지금 나가요', 준호는 '나와 있어요'로 답한다. 첫 탑승 뒤 P에서 넘어간 화면을 찍는다"""
+    sc = "chain"
+    navi("route", lat=37.2839144, lon=126.9896135, name="집")
+    time.sleep(8)
+    log("픽업 전 내비:", navi("state"))
+    pids = begin_group(sc)
+    for pid, k in zip(pids, ("p1", "p2")):
+        share(pid, sc, k)
+    wait_text(lambda t: t == "만날 곳", what="만날 곳")
+    w, h = (int(v) for v in re.findall(r"(\d+)x(\d+)", adb("shell", "wm", "size"))[-1])
+    for _ in range(6):  # 차례로 카드는 함께 모이는 곳 카드 아래라 첫 화면 밖이다: 오른쪽 칸을 밀어 올린다(begin_group 방식)
+        if "차례로 태울게요" in texts():
+            break
+        adb("shell", "input", "swipe", str(w * 7 // 10), str(h * 3 // 4), str(w * 7 // 10), str(h // 4), "500")
+        time.sleep(1)
+    snap("chain-cards.png")
+    log("차례로 카드:", [t for t in texts() if "차례" in t or re.match(r"\d\. ", t)])
+    tap("차례로 태울게요")
+    time.sleep(3)
+    keys = ("chosen", "etaSec", "outNow")
+    log("확정 직후 서버:", [{k: (server(pid) or {}).get(k) for k in keys} for pid in pids])
+    done = set()
+    gear("Drive")
+    t0 = devtime()
+    drive(route(sc), 30, lambda t, left: answer(pids[:1], done, ack=True) or False)
+    board()
+    assert passenger(pids[0], boarded=True) == 204
+    gear("Park")
+    front()
+    got = wait_text(lambda t: t.startswith("차례로 태우는 중"), timeout=20, what="차례 카드")  # 내비가 앞에 나와 있으면 앱을 다시 가져온다
+    snap("chain-next.png")
+    log("넘어간 뒤 화면:", [t for t in got if "차례" in t or "남은" in t or "앞 · " in t])
+    log("넘어간 뒤 서버:", [{k: (server(pid) or {}).get(k) for k in keys} for pid in pids])
+    time.sleep(12)
+    log("넘어간 뒤 15초 내비:", navi("state"))
+    gear("Drive")
+    route2 = [(float(a), float(b)) for a, b in SC[sc]["route2"]]
+    drive(route2, 40, lambda t, left: answer(pids[1:], done, ready=True) or False)
+    board()
+    assert passenger(pids[1], boarded=True) == 204
+    gear("Park")
+    front()
+    wait_text(lambda t: t == "만났어요", timeout=20, what="'만났어요'")
+    log("만남 화면:", [t for t in texts() if "확정부터" in t or "근처로" in t])
+    log("운전자 음성:", spoken(t0))
+    log("서버:", [server(pid) for pid in pids])
+    time.sleep(15)
+    log("만남 15초 뒤 내비:", navi("state"))
+    finish()
+
+
 def cut(points, done):
     """points를 처음부터 done m 간 자리에서 자른 나머지 경로"""
     acc = 0
@@ -820,7 +874,8 @@ if __name__ == "__main__":
           "handsfree": handsfree, "fallback": fallback, "reverse": reverse, "wrongside": wrongside, "stop": stop,
           "cancel": cancel, "decline": decline, "nospot": nospot, "tour": tour,
           "ack": ack, "arrive": arrive, "continue": cont, "continue-cancel": lambda: cont("continue-cancel"),
-          "continue-full": lambda: cont("continue-full"), "group": group, "group-transit": group_transit, "waiting": waiting}.get(name)
+          "continue-full": lambda: cont("continue-full"), "group": group, "group-transit": group_transit, "waiting": waiting,
+          "chain": chain}.get(name)
     if fn is None:
         raise SystemExit(__doc__)
     fn()

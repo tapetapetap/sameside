@@ -207,6 +207,7 @@ class PickupService : Service() {
                     // 링크 id는 위치를 볼 수 있는 열쇠라 로그에 남기지 않는다
                     Log.i(TAG, "픽업 시작, 빈 좌석 ${pickup?.emptySeatsAtStart}" + if (persons.size > 1) ", ${persons.size}명" else "")
                     push()
+                    runCatching { navi?.getDestinationInfo() } // 5차: 차례 계획의 목적지 구간(답은 onDestinationInfo → Event.Dest)
                 } else {
                     serverDown = true
                     main.postDelayed({ if (waiting == persons) begin(persons) }, POLL_MS)
@@ -545,7 +546,13 @@ class PickupService : Service() {
                     }
                     override fun onDestinationInfo(destinationInfo: DestinationInfo) {
                         val name = destinationInfo.name
-                        main.post { dest = name.orEmpty(); answered() }
+                        val pos = LatLon(destinationInfo.latitude, destinationInfo.longitude)
+                        main.post {
+                            dest = name.orEmpty(); answered()
+                            // 5차: 원래 목적지 좌표. 비었거나 앱이 넣은 지점이면 null(research R44)
+                            val own = name.isNullOrBlank() || name == People.loadNavOwn(this@PickupService) || pos.lat == 0.0 || pos.lon == 0.0
+                            handle(Event.Dest(if (own) null else pos))
+                        }
                     }
                     override fun onWayPointInfo(waypointInfoList: List<WaypointInfo>) {
                         val names = waypointInfoList.map { it.name }

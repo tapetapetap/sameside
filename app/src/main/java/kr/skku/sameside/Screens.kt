@@ -80,7 +80,7 @@ fun Ui.people(list: List<Person>, car: Car?, canPick: Boolean, together: Boolean
 
 /** 오른쪽 칸: 진행 중인 픽업의 상황. contactOf는 가는 중 연락 줄 상태(서비스의 통화 상태로 센다) */
 fun Ui.situation(p: Pickup?, park: Boolean, serverDown: Boolean, waiting: Boolean, contactOf: (Member) -> Contact,
-                 onConfirm: (Int) -> Unit, onCancel: () -> Unit, onDismiss: () -> Unit, onArrive: (Boolean) -> Unit): View {
+                 onConfirm: (Int) -> Unit, onChain: () -> Unit, onCancel: () -> Unit, onDismiss: () -> Unit, onArrive: (Boolean) -> Unit): View {
     val top = listOfNotNull(if (serverDown) banner("서버에 연결하지 못했어요 · 2초마다 다시 시도해요") else null)
     val cancel = button("픽업 취소", park, primary = false, onClick = onCancel)
     val who = p?.person?.name.orEmpty()
@@ -93,7 +93,7 @@ fun Ui.situation(p: Pickup?, park: Boolean, serverDown: Boolean, waiting: Boolea
             cancel,
         )
         Status.SPOTS -> listOfNotNull(headline("만날 곳", 40f), Pick.transitNote(p)?.let { (t, d) -> transitCard(t, d) }) +
-            p.spots.mapIndexed { i, s -> spotCard(p, s, i, park) { onConfirm(i) } } + cancel
+            p.spots.mapIndexed { i, s -> spotCard(p, s, i, park) { onConfirm(i) } } + listOfNotNull(p.chain?.let { chainCard(p, it, park, onChain) }) + cancel
         Status.NOSPOT -> if (p.group) listOf(headline("함께 만날 곳이 없어요", 36f), body("한 명씩 데리러 가 주세요"), cancel)
         else listOf(headline("가까운 곳에 같은 편 자리가 없어요", 36f), body("위치 공유는 이어서 해요"), cancel)
         Status.GOING -> going(p, park, contactOf, onArrive) + cancel
@@ -115,12 +115,16 @@ fun Ui.situation(p: Pickup?, park: Boolean, serverDown: Boolean, waiting: Boolea
 private fun Ui.going(p: Pickup, park: Boolean, contactOf: (Member) -> Contact, onArrive: (Boolean) -> Unit): List<View> {
     val s = p.spot
     val aboard = p.active.count { it.aboard }
+    val here = if (p.chained) p.active.filter { it.stop == p.chosen } else p.active // 5차: 남은 시간 옆 이름은 지금 지점 사람
     return listOfNotNull(
         if (p.arriveCard) card(headline("도착했다고 알릴까요?", 40f),
             row(16, button("보내기", park) { onArrive(true) }, button("아니요", park, primary = false) { onArrive(false) })) else null,
         Pick.transitNote(p)?.let { (t, d) -> transitCard(t, d) }, // 4차: 도착 확인 카드 바로 아래
+        p.chain?.takeIf { p.chained }?.let { // 5차: 같은 자리(차례 모드에는 대중교통 강조 카드가 없다)
+            card(text("차례로 태우는 중 · ${p.chosen + 1}/${p.spots.size}", 26f, R.color.text1, 700), strip(p, it, p.chosen))
+        },
         row(24, text("${minutes(p.etaSec ?: 0.0)}분", 72f, R.color.text1, 800),
-            column(4, small("남은 시간"), body("${s?.line.orEmpty()} · ${names(p.active)}")), grow = 1),
+            column(4, small("남은 시간"), body("${s?.line.orEmpty()} · ${names(here)}")), grow = 1),
         s?.let { Pick.progress(it.pos, p) }?.let { Bar(ctx, it) },
         s?.let { map(it, mapPeople(p, it, going = true), p.track.lastOrNull()?.pos, 300f, 200.0) },
         if (p.group && aboard in 1 until p.active.size) small("${p.active.size}명 중 ${aboard}명 탔어요") else null,
@@ -130,10 +134,10 @@ private fun Ui.going(p: Pickup, park: Boolean, contactOf: (Member) -> Contact, o
     )
 }
 
-/** 지도에 그릴 사람: 빠지지 않은 사람(가는 중에는 아직 안 탄 사람). 대중교통으로 오면 그 구간, 색 번호(4차 data-model §1) */
+/** 지도에 그릴 사람: 빠지지 않은 사람(가는 중에는 아직 안 탄 사람, 차례면 지금 지점 사람). 대중교통으로 오면 그 구간, 색 번호(4차 data-model §1) */
 private fun mapPeople(p: Pickup, s: Spot, going: Boolean, slots: List<Int> = colorSlots(p.members.map { it.person.name })): List<MapPerson> =
     p.members.mapIndexedNotNull { i, m ->
-        if (m.out || (going && m.aboard)) null
+        if (m.out || (going && (m.aboard || (p.chained && m.stop != p.chosen)))) null
         else MapPerson(m.person.name, m.passenger.pos, s.plans.getOrNull(i)?.leg ?: m.offer?.leg?.takeIf { m.transitAccepted }, slots[i])
     }
 
@@ -201,7 +205,7 @@ private fun Ui.spotCard(p: Pickup, s: Spot, i: Int, park: Boolean, onPick: () ->
     val people = if (p.group) p.members.mapIndexedNotNull { k, m -> s.plans.getOrNull(k)?.let { who(k, m, it.leg, it.arriveSec) } }
     else listOf(p.lead.offer?.takeIf { p.lead.transitAccepted }?.let { who(0, p.lead, it.leg, it.arriveSec) } ?: who(0, p.lead, null, s.walkSec))
     val after = listOfNotNull(small("차 ${minutes(s.carSec)}분"),
-        if (p.group) p.nearbySec?.takeIf { primary }?.let { small("근처로 데리러 가면 약 ${minutes(it)}분") }
+        if (p.group) p.nearbySec?.takeIf { primary && p.chain == null }?.let { small("근처로 데리러 가면 약 ${minutes(it)}분") } // 5차: 계획이 있으면 차례로 카드
         else Pick.compareLine(s)?.let { small(it) }) // 2차: 건너기 n분 · 유턴 m분(함께 태우기에는 없다)
     val height = if (primary) 230f else 150f
     val shown = mapPeople(p, s, going = false, slots)
@@ -216,6 +220,30 @@ private fun Ui.spotCard(p: Pickup, s: Spot, i: Int, park: Boolean, onPick: () ->
         *(people + after).toTypedArray(),
         button("이 자리로 갈게요", park, primary = primary, onClick = onPick),
     )
+}
+
+/** 5차 차례로 카드(contracts/ui.md §1): 제목, 차례 문장, 구간 그림, 지점 목록, 버튼 */
+private fun Ui.chainCard(p: Pickup, c: Chain, park: Boolean, onChain: () -> Unit): View = card(
+    text("차례로 태우기", 30f, R.color.text1, 700),
+    text("${c.stops.joinToString(" → ") { stopNames(p, it) }} 차례로 · 약 ${minutes(c.legs.sum())}분", 24f, R.color.text2),
+    strip(p, c, -1),
+    *c.stops.mapIndexed { k, st -> text("${k + 1}. ${st.spot.line} · ${stopNames(p, st)}", 22f, R.color.text3) }.toTypedArray(),
+    button("차례로 태울게요", park, onClick = onChain),
+)
+
+/** 그 지점의 빠지지 않은 사람 이름("민지·준호") */
+private fun stopNames(p: Pickup, st: ChainStop) = st.who.filter { !p.members[it].out }.joinToString("·") { p.members[it].person.name }
+
+/** 구간 그림(contracts/ui.md §3). current는 지금 가는 지점 번호(고를 때 −1). 지금 지점 앞 구간은 지금 남은 분이다 */
+private fun Ui.strip(p: Pickup, c: Chain, current: Int): View {
+    val slots = colorSlots(p.members.map { it.person.name })
+    val nodes = c.stops.map { st ->
+        val who = st.who.filter { !p.members[it].out }
+        ChainNode(slots[who.firstOrNull() ?: st.who[0]], stopNames(p, st), who.isNotEmpty() && who.all { p.members[it].aboard })
+    }
+    val plan = c.legs + listOfNotNull(c.destSec)
+    val shown = plan.mapIndexed { k, sec -> when { current < 0 || k > current -> minutes(sec); k == current -> minutes(p.etaSec ?: sec); else -> null } }
+    return ChainStrip(ctx, nodes, plan, shown, current)
 }
 
 private val qrs = LinkedHashMap<String, Bitmap>() // 위치마다 다시 그려도 QR은 링크가 바뀔 때만 만든다

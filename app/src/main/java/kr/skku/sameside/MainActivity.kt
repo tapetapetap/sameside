@@ -75,6 +75,7 @@ class MainActivity : Activity() {
         replace(R.id.screen, ui.situation(p, park, PickupService.serverDown, waiting = p == null && PickupService.creating,
             contactOf = { m -> contact(m, PickupService.inCall, PickupService.callSince, p?.lastCaller === m, SystemClock.elapsedRealtime()) },
             onConfirm = { PickupService.send(Event.Confirm(it)) },
+            onChain = { PickupService.send(Event.ConfirmChain) },
             onCancel = { PickupService.send(Event.Cancel) },
             onDismiss = { PickupService.dismiss() },
             onArrive = { PickupService.send(Event.Arrive(it)) },
