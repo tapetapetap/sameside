@@ -14,6 +14,9 @@ import android.widget.TextView
 
 private val AVATARS = listOf(R.color.avatar1, R.color.avatar2, R.color.avatar3, R.color.avatar4, R.color.avatar5)
 
+/** 4차 지도 선·점과 사람 줄 아이콘 색. 번호는 colorSlots(data-model §4) */
+val AVATAR_LINES = listOf(R.color.avatar1_line, R.color.avatar2_line, R.color.avatar3_line, R.color.avatar4_line, R.color.avatar5_line)
+
 /** 화면을 코드로 조립하는 작은 도구들. 글자 크기는 contracts 머리 */
 class Ui(val ctx: Context) {
     private val density = ctx.resources.displayMetrics.density

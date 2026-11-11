@@ -92,8 +92,8 @@ fun Ui.situation(p: Pickup?, park: Boolean, serverDown: Boolean, waiting: Boolea
             headline(linkLine(p), 36f),
             cancel,
         )
-        Status.SPOTS -> listOf(headline("만날 곳", 40f)) + p.spots.mapIndexed { i, s -> spotCard(p, s, i, park) { onConfirm(i) } } +
-            listOfNotNull(transitLine(p)?.let { body(it) }) + cancel
+        Status.SPOTS -> listOfNotNull(headline("만날 곳", 40f), Pick.transitNote(p)?.let { (t, d) -> transitCard(t, d) }) +
+            p.spots.mapIndexed { i, s -> spotCard(p, s, i, park) { onConfirm(i) } } + cancel
         Status.NOSPOT -> if (p.group) listOf(headline("함께 만날 곳이 없어요", 36f), body("한 명씩 데리러 가 주세요"), cancel)
         else listOf(headline("가까운 곳에 같은 편 자리가 없어요", 36f), body("위치 공유는 이어서 해요"), cancel)
         Status.GOING -> going(p, park, contactOf, onArrive) + cancel
@@ -118,6 +118,7 @@ private fun Ui.going(p: Pickup, park: Boolean, contactOf: (Member) -> Contact, o
     return listOfNotNull(
         if (p.arriveCard) card(headline("도착했다고 알릴까요?", 40f),
             row(16, button("보내기", park) { onArrive(true) }, button("아니요", park, primary = false) { onArrive(false) })) else null,
+        Pick.transitNote(p)?.let { (t, d) -> transitCard(t, d) }, // 4차: 도착 확인 카드 바로 아래
         row(24, text("${minutes(p.etaSec ?: 0.0)}분", 72f, R.color.text1, 800),
             column(4, small("남은 시간"), body("${s?.line.orEmpty()} · ${names(p.active)}")), grow = 1),
         s?.let { Pick.progress(it.pos, p) }?.let { Bar(ctx, it) },
@@ -126,15 +127,15 @@ private fun Ui.going(p: Pickup, park: Boolean, contactOf: (Member) -> Contact, o
         *p.members.map { m -> ContactRow(ctx, m.person.name) { contactOf(m) } }.toTypedArray(),
         body("내비에 넣었어요. 출발하세요"),
         p.lostDest?.let { small("원래 목적지($it) 대신 만날 곳으로 안내해요") },
-        transitLine(p)?.let { body(it) },
     )
 }
 
-/** 지도에 그릴 사람: 빠지지 않은 사람(가는 중에는 아직 안 탄 사람). 대중교통으로 오면 노선 이름 */
-private fun mapPeople(p: Pickup, s: Spot, going: Boolean) = p.members.mapIndexedNotNull { i, m ->
-    if (m.out || (going && m.aboard)) null
-    else MapPerson(m.person.name, m.passenger.pos, s.plans.getOrNull(i)?.leg?.line ?: m.offer?.leg?.line?.takeIf { m.transitAccepted })
-}
+/** 지도에 그릴 사람: 빠지지 않은 사람(가는 중에는 아직 안 탄 사람). 대중교통으로 오면 그 구간, 색 번호(4차 data-model §1) */
+private fun mapPeople(p: Pickup, s: Spot, going: Boolean, slots: List<Int> = colorSlots(p.members.map { it.person.name })): List<MapPerson> =
+    p.members.mapIndexedNotNull { i, m ->
+        if (m.out || (going && m.aboard)) null
+        else MapPerson(m.person.name, m.passenger.pos, s.plans.getOrNull(i)?.leg ?: m.offer?.leg?.takeIf { m.transitAccepted }, slots[i])
+    }
 
 private fun Ui.map(s: Spot, people: List<MapPerson>, car: LatLon?, heightDp: Float, halfM: Double) = SpotMap(ctx, DEMO, s, people, car, halfM, heightDp)
 
@@ -172,11 +173,17 @@ private fun Ui.groupLink(p: Pickup): List<View> = listOf(headline("함께 데리
     )
 }
 
-private fun transitLine(p: Pickup): String? {
-    if (p.group) return null
-    val o = p.lead.offer ?: return null
-    return if (p.lead.transitAccepted) "${p.person.name}님이 ${o.leg.line} 타고 와요"
-    else "${p.person.name}님께 ${o.leg.line} ${o.leg.stops}정거장 안을 보냈어요"
+/** 대중교통 강조 카드(4차 contracts/ui.md §5): 연한 파랑 바탕, 파란 테두리, line1 원 안의 흰 열차, 두 줄 */
+private fun Ui.transitCard(title: String, detail: String): View {
+    val circle = icon(R.drawable.ic_train, R.color.on_accent, 26).apply {
+        background = round(c(R.color.line1), 100f)
+        setPadding(px(11), px(11), px(11), px(11))
+        layoutParams = LinearLayout.LayoutParams(px(48), px(48))
+    }
+    return row(20, circle, column(4, text(title, 28f, R.color.text1, 700), text(detail, 22f, R.color.text2)), grow = 1).apply {
+        background = round(c(R.color.blue_soft), 24f, c(R.color.blue), 2f)
+        setPadding(px(28), px(24), px(28), px(24))
+    }
 }
 
 private fun Ui.icon(res: Int, color: Int, size: Int) = ImageView(ctx).apply {
@@ -185,21 +192,28 @@ private fun Ui.icon(res: Int, color: Int, size: Int) = ImageView(ctx).apply {
     layoutParams = LinearLayout.LayoutParams(px(size), px(size))
 }
 
-/** 만날 곳 카드: 지도(1순위 230dp, 나머지 150dp) + 1차 카드. 함께 태우기는 사람마다 가는 방법 줄(contracts/ui.md §2) */
+/** 만날 곳 카드(4차 contracts/ui.md §1·§4): 두 지도(1순위 230dp, 나머지 150dp) + 이름·이유 + 사람 줄 + 차 줄·비교 줄 + 버튼 */
 private fun Ui.spotCard(p: Pickup, s: Spot, i: Int, park: Boolean, onPick: () -> Unit): View {
     val primary = i == 0
-    val lines: List<View> = if (p.group) p.members.mapIndexedNotNull { k, m ->
-        val pl = s.plans.getOrNull(k) ?: return@mapIndexedNotNull null
-        val how = pl.leg?.let { "${it.line} ${minutes(pl.arriveSec)}분" } ?: "걸어서 ${minutes(pl.arriveSec)}분"
-        row(10, icon(if (pl.leg == null) R.drawable.ic_walk else R.drawable.ic_train, R.color.text3, 26), small("${m.person.name} $how"))
-    } + listOfNotNull(small("차 ${minutes(s.carSec)}분"), p.nearbySec?.takeIf { primary }?.let { small("근처로 데리러 가면 약 ${minutes(it)}분") })
-    else listOfNotNull(small("${p.person.name}님 걸어서 ${minutes(s.walkSec)}분 · 차 ${minutes(s.carSec)}분"),
-        Pick.compareLine(s)?.let { small(it) }) // 2차: 건너기 n분 · 유턴 m분(함께 태우기에는 없다)
+    val slots = colorSlots(p.members.map { it.person.name })
+    fun who(k: Int, m: Member, leg: TransitLeg?, sec: Double) =
+        row(10, icon(if (leg == null) R.drawable.ic_walk else R.drawable.ic_train, AVATAR_LINES[slots[k]], 26), small(Pick.howLine(m.person.name, leg, sec)))
+    val people = if (p.group) p.members.mapIndexedNotNull { k, m -> s.plans.getOrNull(k)?.let { who(k, m, it.leg, it.arriveSec) } }
+    else listOf(p.lead.offer?.takeIf { p.lead.transitAccepted }?.let { who(0, p.lead, it.leg, it.arriveSec) } ?: who(0, p.lead, null, s.walkSec))
+    val after = listOfNotNull(small("차 ${minutes(s.carSec)}분"),
+        if (p.group) p.nearbySec?.takeIf { primary }?.let { small("근처로 데리러 가면 약 ${minutes(it)}분") }
+        else Pick.compareLine(s)?.let { small(it) }) // 2차: 건너기 n분 · 유턴 m분(함께 태우기에는 없다)
+    val height = if (primary) 230f else 150f
+    val shown = mapPeople(p, s, going = false, slots)
+    val maps = LinearLayout(ctx).apply {
+        addView(PeopleMap(ctx, DEMO, s, shown, height), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        addView(StopMap(ctx, DEMO, s, shown, height), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = px(12) })
+    }
     return card(
-        map(s, mapPeople(p, s, going = false), null, if (primary) 230f else 150f, 140.0),
+        maps,
         text(s.line, if (primary) 40f else 30f, R.color.text1, 700),
         body(s.reason, if (primary) 26f else 22f),
-        *lines.toTypedArray(),
+        *(people + after).toTypedArray(),
         button("이 자리로 갈게요", park, primary = primary, onClick = onPick),
     )
 }

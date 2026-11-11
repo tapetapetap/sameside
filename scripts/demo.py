@@ -318,6 +318,7 @@ def snap(name):
     """SHOT_DIR 환경 변수가 있으면 차 화면을 그 폴더에 저장한다(문서 캡처용)"""
     d = os.environ.get("SHOT_DIR")
     if d:
+        os.makedirs(d, exist_ok=True)  # 4차: 폴더가 없으면 장면이 멈추던 것
         with open(os.path.join(d, name), "wb") as f:
             f.write(subprocess.run([ADB, "exec-out", "screencap", "-p"], capture_output=True).stdout)
 
@@ -348,6 +349,7 @@ def share(pid, scene, key="passenger"):
 def confirm_first():
     wait_text(lambda t: t == "이 자리로 갈게요", what="지점 카드")
     first = texts()
+    snap("cards.png")  # 4차: 만날 곳 카드(두 지도) 캡처, SHOT_DIR이 있을 때만
     tap("이 자리로 갈게요")
     return first
 
@@ -583,15 +585,30 @@ def wrongside():
 
 
 def transit(scene="transit"):
+    """1차 US4 + 4차 FR-080: 안 보냄 6초 → 받아들임 → '…타고 화서역으로 와요' 10초 → 가는 중 5초(맨 위 강조 카드) → 취소"""
     pid = begin(scene)
     share(pid, scene)
     wait_text(lambda t: t == "이 자리로 갈게요", what="지점 카드")
+    log("카드 뜸")
     offer = (server(pid) or {}).get("offer")
     log("대중교통 제안:", offer)
     if offer:
+        snap("transit-offer.png")
+        time.sleep(6)
         passenger(pid, transit="accept")
-        wait_text(lambda t: "타고 와요" in t, what="받아들임 문구")
-        log("받아들인 뒤 카드:", [t for t in texts() if "앞" in t])
+        log("받아들임 보냄")
+        wait_text(lambda t: "타고" in t and t.endswith("와요"), what="받아들임 문구")
+        log("와요 뜸")
+        snap("transit-accepted.png")
+        time.sleep(10)
+        log("받아들인 뒤 카드:", [t for t in texts() if "앞" in t or "정거장" in t])
+        tap("이 자리로 갈게요")
+        front()  # 내비가 앞에 와도 앱을 다시 앞으로
+        wait_text(lambda t: t == "남은 시간", what="가는 중 화면")
+        log("가는 중")
+        snap("transit-going.png")
+        time.sleep(5)
+    log("취소")
     tap("픽업 취소")
     finish()
 

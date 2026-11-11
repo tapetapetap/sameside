@@ -27,4 +27,15 @@
     <color name="green_soft">#FF10291E</color>
     <color name="amber">#FFF2A33A</color>
     <color name="amber_soft">#FF2E2310</color>
+    <!-- 4차 지도(specs/004 data-model §9). 1호선은 다크 바탕 대비를 위해 밝게, 사람 선은 원색 -->
+    <color name="line1">#FF5C8FF0</color>
+    <color name="avatar1_line">#FF5B7CFA</color>
+    <color name="avatar2_line">#FFF2994A</color>
+    <color name="avatar3_line">#FF27AE60</color>
+    <color name="avatar4_line">#FFEB5757</color>
+    <color name="avatar5_line">#FF9B51E0</color>
+    <!-- 4차 차 세울 곳 지도의 아스팔트와 차선(FR-085) -->
+    <color name="asphalt">#FF3A3F47</color>
+    <color name="lane_white">#FFD0D4DA</color>
+    <color name="lane_yellow">#FFE0B000</color>
 </resources>

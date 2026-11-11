@@ -29,4 +29,15 @@
     <color name="avatar3">#FF27AE60</color>
     <color name="avatar4">#FFEB5757</color>
     <color name="avatar5">#FF9B51E0</color>
+    <!-- 4차 지도(specs/004 data-model §9). 사람 선·점·아이콘은 원색을 0.75배로 진하게 해 밝은 지도 바탕 대비 3:1 이상 -->
+    <color name="line1">#FF0052A4</color>
+    <color name="avatar1_line">#FF445DBC</color>
+    <color name="avatar2_line">#FFB67338</color>
+    <color name="avatar3_line">#FF1D8348</color>
+    <color name="avatar4_line">#FFB04141</color>
+    <color name="avatar5_line">#FF743DA8</color>
+    <!-- 4차 차 세울 곳 지도의 아스팔트와 차선(FR-085) -->
+    <color name="asphalt">#FF6B7280</color>
+    <color name="lane_white">#FFFFFFFF</color>
+    <color name="lane_yellow">#FFF5C400</color>
 </resources>

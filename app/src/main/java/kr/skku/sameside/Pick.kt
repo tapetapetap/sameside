@@ -85,7 +85,7 @@ fun bearing(o: LatLon, a: LatLon, b: LatLon): Double = vecBearing(xy(o, b) - xy(
 
 private fun vecBearing(v: XY) = (Math.toDegrees(atan2(v.x, v.y)) + 360.0) % 360.0
 
-private fun headingVec(deg: Double) = XY(kotlin.math.sin(Math.toRadians(deg)), cos(Math.toRadians(deg)))
+fun headingVec(deg: Double) = XY(kotlin.math.sin(Math.toRadians(deg)), cos(Math.toRadians(deg)))
 
 fun angleDiff(a: Double, b: Double): Double {
     val d = abs(a - b) % 360.0
@@ -173,7 +173,7 @@ data class Spot(
     val line get() = "${landmark.name} 앞"
 }
 
-data class Offer(val leg: TransitLeg, val gainMin: Int, val spot: Spot)
+data class Offer(val leg: TransitLeg, val gainMin: Int, val spot: Spot, val arriveSec: Double) // 4차: arriveSec = 탈 역까지 걷기 + 기다림 + 탐 + 내려서 걷기
 
 /** 한 사람이 한 지점까지 가는 방법(3차 data-model §2). leg가 null이면 걷기 */
 data class Plan(val leg: TransitLeg?, val walkM: Double, val arriveSec: Double, val crossing: Int, val standLine: String)
@@ -192,6 +192,7 @@ class Member(val person: Person, val id: String, val key: String) {
     val passenger = Passenger()
     var offer: Offer? = null // 한 명 픽업의 대중교통 안(1차)
     var transitAccepted = false // 한 명: 안을 받아들임, 함께: 안내에 "알겠어요"
+    var transitDeclined = false // 4차: 한 명 픽업에서 안을 거절("그냥 걸어갈게요")
     var walkSec: Double? = null
     var called = false
     var readySpoken = false
@@ -480,6 +481,22 @@ object Pick {
     /** 차 카드 비교 줄 */
     fun compareLine(s: Spot) = compare(s)?.let { (c, t) -> "건너기 ${c}분 · 유턴 ${t}분" }
 
+    /** 대중교통 강조 카드(4차 FR-077·078): (굵은 줄, 작은 줄). 한 명 픽업에서 안이 있고 거절하지 않았을 때만 */
+    fun transitNote(p: Pickup): Pair<String, String>? {
+        val m = p.lead
+        val o = m.offer ?: return null
+        if (p.group || m.transitDeclined) return null
+        val l = o.leg
+        val stops = "${l.board.name} → ${l.alight.name} ${l.stops}정거장"
+        return if (m.transitAccepted) "${p.person.name}님이 ${l.line} 타고 ${l.alight.name}${toParticle(l.alight.name)} 와요" to stops
+        else "${p.person.name}님께 ${l.line} 안을 보냈어요" to "$stops · ${o.spot.line}에서 만나면 ${o.gainMin}분 빨라요"
+    }
+
+    /** 카드 사람 줄(4차 FR-076): "민지 걸어서 3분" / "준호 1호선 1정거장(성균관대역 → 화서역) · 12분" */
+    fun howLine(name: String, leg: TransitLeg?, sec: Double) =
+        if (leg == null) "$name 걸어서 ${minutes(sec)}분"
+        else "$name ${leg.line} ${leg.stops}정거장(${leg.board.name} → ${leg.alight.name}) · ${minutes(sec)}분"
+
     /** 페이지 "k분 빨라요"의 k. 차가 세어 보낸다 */
     fun fasterMin(s: Spot) = compare(s)?.let { (c, t) -> t - c }
 
@@ -494,7 +511,7 @@ object Pick {
             val s = choose(area, car, t.alight.pos, careful).firstOrNull() ?: return@mapNotNull null
             val arrive = d1 / Rules.WALK_M_PER_MIN * 60.0 + t.waitSec + t.rideSec + s.walkSec
             val gain = best.meetSec - max(s.carSec, arrive)
-            if (gain > Rules.GAIN_SEC) gain to Offer(t, floor(gain / 60.0).toInt(), s) else null
+            if (gain > Rules.GAIN_SEC) gain to Offer(t, floor(gain / 60.0).toInt(), s, arrive) else null
         }.maxByOrNull { it.first }?.second
     }
 
@@ -567,9 +584,9 @@ object Pick {
                 val who = p.person.name
                 p.passenger.apply { consent = e.consent; pos = e.pos; ready = e.ready; ack = e.ack }
                 val offer = p.lead.offer
-                if ((p.status == Status.SPOTS || p.status == Status.GOING) && e.transit == "accept" && !p.lead.transitAccepted && offer != null) {
-                    accept(p, offer, out)
-                }
+                val open = (p.status == Status.SPOTS || p.status == Status.GOING) && !p.lead.transitAccepted && !p.lead.transitDeclined && offer != null
+                if (open && e.transit == "accept") accept(p, offer!!, out)
+                if (open && e.transit == "decline") p.lead.transitDeclined = true // 4차: 기록만(지점·음성·내비 그대로)
                 when (p.status) {
                     Status.LINK -> choose(area, p, now, out)
                     Status.GOING -> {
