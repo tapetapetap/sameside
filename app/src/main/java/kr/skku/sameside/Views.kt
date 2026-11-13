@@ -37,9 +37,9 @@ data class Box(val l: Float, val t: Float, val r: Float, val b: Float) {
     fun hits(o: Box) = l < o.r && o.l < r && t < o.b && o.t < b
 }
 
-/** 후보 칸 가운데 지도(w×h) 안에 들고 앞서 놓은 칸과 겹치지 않는 첫 번째. 없으면 첫 후보(기본 자리) */
-fun firstFree(candidates: List<Box>, taken: List<Box>, w: Float, h: Float): Int =
-    candidates.indexOfFirst { b -> b.l >= 0 && b.t >= 0 && b.r <= w && b.b <= h && taken.none { it.hits(b) } }.coerceAtLeast(0)
+/** 6차: 후보 칸 가운데 지도(w×h) 안에 들고 앞서 놓은 칸과 겹치지 않는 첫 번째. 없으면 −1 */
+fun freeIndex(candidates: List<Box>, taken: List<Box>, w: Float, h: Float): Int =
+    candidates.indexOfFirst { b -> b.l >= 0 && b.t >= 0 && b.r <= w && b.b <= h && taken.none { it.hits(b) } }
 
 private fun View.dp(v: Float) = v * resources.displayMetrics.density
 private fun View.sp(v: Float) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, v, resources.displayMetrics)
@@ -165,11 +165,16 @@ abstract class MapBase(context: Context, protected val area: Area, private val h
 
     protected fun box(x: Float, y: Float, r: Float) = Box(x - r, y - r, x + r, y + r)
 
-    /** 이름표를 at 후보 가운데 겹치지 않는 첫 자리에 그린다(가운데 x, 글자 기준선 y). gap은 이름표 양옆 여유 */
-    protected fun place(c: Canvas, s: String, at: List<Pair<Float, Float>>, p: Paint, fg: Int, gap: Float = dp(3f)) {
+    /**
+     * 이름표를 at 후보 가운데 겹치지 않는 첫 자리에 그린다(가운데 x, 글자 기준선 y). gap은 이름표 양옆 여유.
+     * 6차: [optional](역·노선 글·지나는 곳)은 빈 자리가 없으면 그리지 않는다. 나머지는 지금처럼 첫 자리에 그린다
+     */
+    protected fun place(c: Canvas, s: String, at: List<Pair<Float, Float>>, p: Paint, fg: Int, gap: Float = dp(3f), optional: Boolean = false) {
         val half = p.measureText(s) / 2 + gap
         val boxes = at.map { (x, y) -> Box(x - half, y + p.ascent(), x + half, y + p.descent()) }
-        val i = firstFree(boxes, taken, width.toFloat(), height.toFloat())
+        val free = freeIndex(boxes, taken, width.toFloat(), height.toFloat())
+        if (free < 0 && optional) return
+        val i = free.coerceAtLeast(0)
         taken += boxes[i]
         label(c, s, at[i].first, at[i].second, p, fg)
     }
@@ -242,11 +247,11 @@ abstract class MapBase(context: Context, protected val area: Area, private val h
     protected fun reserveCorners(w: Float, h: Float, barPx: Float, name: String?) {
         val nx = w - dp(26f)
         taken += Box(nx - dp(14f), dp(6f), nx + dp(14f), dp(50f))
-        taken += Box(dp(10f), h - dp(42f), dp(24f) + maxOf(barPx, dp(40f)), h - dp(6f))
-        taken += Box(w - dp(120f), h - dp(22f), w, h)
+        taken += Box(dp(10f), h - dp(46f), dp(24f) + maxOf(barPx, dp(56f)), h - dp(6f))
+        taken += Box(w - dp(140f), h - dp(24f), w, h)
         plate = name?.let {
-            namePaint.textSize = sp(13f)
-            Box(dp(8f), dp(8f), dp(20f) + namePaint.measureText(it), dp(34f)).also { b -> taken += b }
+            namePaint.textSize = sp(20f) // 6차: 그림 안 글자 20sp
+            Box(dp(8f), dp(8f), dp(20f) + namePaint.measureText(it), dp(40f)).also { b -> taken += b }
         }
     }
 
@@ -254,30 +259,30 @@ abstract class MapBase(context: Context, protected val area: Area, private val h
     protected fun mapName(c: Canvas, s: String) {
         val b = plate ?: return
         if (taken.any { it !== b && it.hits(b) }) return
-        namePaint.textSize = sp(13f)
+        namePaint.textSize = sp(20f)
         val tw = namePaint.measureText(s)
         fill.color = color(R.color.card); fill.alpha = 217
-        c.drawRoundRect(dp(8f), dp(8f), dp(20f) + tw, dp(34f), dp(6f), dp(6f), fill)
+        c.drawRoundRect(dp(8f), dp(8f), dp(20f) + tw, dp(40f), dp(6f), dp(6f), fill)
         fill.alpha = 255
         namePaint.textAlign = Paint.Align.LEFT; namePaint.color = color(R.color.text2)
-        c.drawText(s, dp(14f), dp(26f), namePaint)
+        c.drawText(s, dp(14f), dp(24f) - (namePaint.ascent() + namePaint.descent()) / 2, namePaint)
     }
 
     /** 북쪽, 축척 막대와 글, 출처를 그리고 자르기를 되돌린다(맨 끝에 부른다) */
     protected fun corners(c: Canvas, barM: Int, k: Float, w: Float, h: Float) {
         val nx = w - dp(26f)
         arrowHead(c, nx, dp(18f), 0f, -1f, dp(9f), color(R.color.text2))
-        bold.textSize = sp(19f)
+        bold.textSize = sp(20f)
         label(c, "N", nx, dp(44f), bold, color(R.color.text2))
         stroke.pathEffect = null
         stroke.color = color(R.color.text2); stroke.strokeWidth = dp(3f)
         c.drawLine(dp(16f), h - dp(14f), dp(16f) + barM * k, h - dp(14f), stroke)
         small.textAlign = Paint.Align.LEFT
-        small.textSize = sp(15f)
+        small.textSize = sp(20f)
         small.style = Paint.Style.FILL; small.color = color(R.color.text2)
-        c.drawText(scaleLabel(barM), dp(16f), h - dp(22f), small)
+        c.drawText(scaleLabel(barM), dp(16f), h - dp(24f), small)
         small.textAlign = Paint.Align.RIGHT
-        small.textSize = sp(12f); small.color = color(R.color.text3)
+        small.textSize = sp(14f); small.color = color(R.color.text3) // 출처 표기만 14sp(spec FR-103)
         c.drawText("© OpenStreetMap", w - dp(10f), h - dp(8f), small)
         c.restore()
     }
@@ -313,8 +318,9 @@ class SpotMap(context: Context, area: Area, private val spot: Spot, private val 
         val halfW = (w / 2 / k - margin).toDouble()
         val halfH = (h / 2 / k - margin).toDouble()
         val green = color(R.color.green)
-        small.textSize = sp(17f)
-        bold.textSize = sp(19f)
+        val greenText = color(R.color.green_text) // 6차: 글자는 4.5:1 이상
+        small.textSize = sp(20f)
+        bold.textSize = sp(20f)
         // 걷는 점선(지도 안 사람만)
         for (m in people) {
             val q = m.pos?.let { xy(o, it) } ?: continue
@@ -385,7 +391,7 @@ class SpotMap(context: Context, area: Area, private val spot: Spot, private val 
         // 이름표: 북쪽·축척·출처 자리를 비워 두고, 지점 → 지도 안 사람 → 가장자리 사람 → 기준 랜드마크 차례로 빈 자리에
         reserveCorners(w, h, 50f * k, null)
         place(c, spot.line, listOf(sx to sy - dp(44f), sx to sy + dp(30f)), bold, color(R.color.text1))
-        for ((name, x, y) in inside) place(c, name, around(name, x, y, dp(16f), bold), bold, green)
+        for ((name, x, y) in inside) place(c, name, around(name, x, y, dp(16f), bold), bold, greenText)
         for ((group, at, q) in outside) {
             val (ex2, ey2) = at
             val who = group.joinToString("·") { it.name }
@@ -394,9 +400,9 @@ class SpotMap(context: Context, area: Area, private val spot: Spot, private val 
             fun cx(x: Float) = if (half * 2 >= w) w / 2 else x.coerceIn(half, w - half) // 지도보다 긴 이름표도 죽지 않게
             val ty = (ey2 + if (q.y > 0) dp(30f) else -dp(16f)).coerceIn(dp(22f), h - dp(10f))
             place(c, text, listOf(cx(ex2) to ty, cx(ex2 + half + dp(20f)) to ey2 + dp(6f), cx(ex2 - half - dp(20f)) to ey2 + dp(6f),
-                cx(ex2) to ty + dp(26f), cx(ex2) to ty - dp(26f)), bold, green)
+                cx(ex2) to ty + dp(26f), cx(ex2) to ty - dp(26f)), bold, greenText)
         }
-        passing?.let { (name, x, y) -> place(c, name, around(name, x, y, dp(10f), small), small, color(R.color.text3)) }
+        passing?.let { (name, x, y) -> place(c, name, around(name, x, y, dp(10f), small), small, color(R.color.text3), optional = true) }
         corners(c, 50, k, w, h)
     }
 }
@@ -479,18 +485,18 @@ class PeopleMap(context: Context, area: Area, private val spot: Spot, people: Li
             taken += box(x, y, dp(10f))
             Triple(m, x, y)
         }
-        // 이름표: 지점 → 사람 → 역 → 노선 글
-        bold.textSize = sp(17f)
+        // 이름표: 지점 → 사람 → 역 → 노선 글. 6차: 20sp, 역·노선 글은 빈 자리가 없으면 뺀다
+        bold.textSize = sp(20f)
         val side = bold.measureText(spot.line) / 2 + dp(18f)
         place(c, spot.line, listOf(sx to sy - dp(44f), sx to sy + dp(30f), sx + side to sy - dp(18f), sx - side to sy - dp(18f)),
             bold, color(R.color.text1), labelGap)
-        for ((m, x, y) in dots) place(c, m.name, aroundMore(m.name, x, y, dp(16f), bold), bold, color(AVATAR_LINES[m.slot]), labelGap)
-        small.textSize = sp(14f)
-        for ((name, x, y) in stations) place(c, name, aroundMore(name, x, y, dp(14f), small), small, color(R.color.text2), labelGap)
-        bold.textSize = sp(15f)
+        for ((m, x, y) in dots) place(c, m.name, aroundMore(m.name, x, y, dp(16f), bold), bold, color(R.color.text1), labelGap) // 사람 색은 점·점선에
+        small.textSize = sp(20f)
+        for ((name, x, y) in stations) place(c, name, aroundMore(name, x, y, dp(14f), small), small, color(R.color.text2), labelGap, optional = true)
+        bold.textSize = sp(20f)
         for (l in legs) {
             val t = "${l.line} ${l.stops}정거장"
-            place(c, t, beside(t, px(l.board.pos), px(l.alight.pos), bold), bold, line1, labelGap)
+            place(c, t, beside(t, px(l.board.pos), px(l.alight.pos), bold), bold, line1, labelGap, optional = true)
         }
         mapName(c, NAME)
         corners(c, bar, k, w, h)
@@ -569,17 +575,17 @@ class StopMap(context: Context, area: Area, private val spot: Spot, people: List
             Triple(l.name, x, y)
         } }
         // 이름표 차례(사용자 결정): 여기 세워요 → 지점 이름 → 기준 랜드마크
-        bold.textSize = sp(17f)
-        place(c, STOP, around(STOP, bx, by, dp(44f), bold), bold, blue, labelGap) // 핀 둘레: 위 → 아래 → 오른쪽 → 왼쪽(contracts/ui.md §3)
-        bold.textSize = sp(15f)
+        bold.textSize = sp(20f)
+        place(c, STOP, around(STOP, bx, by, dp(44f), bold), bold, color(R.color.blue_text), labelGap) // 핀 둘레: 위 → 아래 → 오른쪽 → 왼쪽(contracts/ui.md §3)
+        bold.textSize = sp(20f)
         val name = spot.landmark.name
         val (gx, gy) = if (stand.isEmpty()) at(g.r + e * 8.0)
         else stand.map { it.first }.average().toFloat() to stand.map { it.second }.average().toFloat()
         val half = bold.measureText(name) / 2 + dp(16f)
         place(c, name, listOf(gx + e.x.toFloat() * half to gy - e.y.toFloat() * dp(20f) + dp(6f), gx to gy - dp(28f), gx to gy + dp(34f)),
             bold, color(R.color.text1), labelGap)
-        small.textSize = sp(14f)
-        passing?.let { (n, x, y) -> place(c, n, around(n, x, y, dp(10f), small), small, color(R.color.text3), labelGap) }
+        small.textSize = sp(20f)
+        passing?.let { (n, x, y) -> place(c, n, around(n, x, y, dp(10f), small), small, color(R.color.text3), labelGap, optional = true) }
         mapName(c, NAME)
         corners(c, bar, k, w, h)
     }
@@ -673,16 +679,11 @@ class ContactRow(context: Context, private val name: String, private val read: (
     private fun color(id: Int) = context.getColor(id)
 
     private fun status(x: Contact) = when (x.kind) {
-        ContactKind.OUT -> "함께 안 타요"
-        ContactKind.ABOARD -> "탔어요"
         ContactKind.CALLING -> "${name}님과 통화 중 · ${(x.sec ?: 0) / 60}:${"%02d".format((x.sec ?: 0) % 60)}"
-        ContactKind.READY -> "나와 있어요"
-        ContactKind.ACK -> "지금 나간대요"
-        ContactKind.MOVING -> "나오고 있어요"
         ContactKind.CALLED -> "전화를 걸었어요 · ${x.sec ?: 0}초 전"
         ContactKind.PHONE_NOTIFIED -> "${name}님 폰으로 알렸어요"
         ContactKind.NOTIFIED -> "지금 나오세요를 보냈어요 · " + if ((x.sec ?: 0) > 0) "${x.sec}초 뒤 전화" else "곧 전화"
-        ContactKind.WAIT -> "알림 전"
+        else -> shortStatus(x.kind) // 초·이름이 없는 상태는 주행 중 한 줄 카드와 같은 말(6차)
     }
 
     override fun onDraw(c: Canvas) {
@@ -727,10 +728,10 @@ class ContactRow(context: Context, private val name: String, private val read: (
             ContactKind.CALLING, ContactKind.CALLED -> R.drawable.ic_call
             else -> R.drawable.ic_bell
         }
-        val tint = when (x.kind) {
+        val tint = when (x.kind) { // 6차: 아이콘·숫자는 진한 글자색(물결·링 선은 green·amber 그대로)
             ContactKind.WAIT -> color(R.color.text3)
-            ContactKind.NOTIFIED, ContactKind.PHONE_NOTIFIED -> amber
-            else -> green
+            ContactKind.NOTIFIED, ContactKind.PHONE_NOTIFIED -> color(R.color.amber_text)
+            else -> color(R.color.green_text)
         }
         if (icon != 0) context.getDrawable(icon)?.mutate()?.let { d ->
             d.setTint(tint)
@@ -740,12 +741,12 @@ class ContactRow(context: Context, private val name: String, private val read: (
             d.draw(c)
         }
         if (x.kind == ContactKind.NOTIFIED) {
-            num.textSize = sp(15f); num.color = amber
+            num.textSize = sp(20f); num.color = color(R.color.amber_text)
             c.drawText("${x.sec ?: 0}", cx, cy + dp(19f), num)
         }
         title.textSize = sp(26f); title.color = color(R.color.text1)
         c.drawText("${name}님", dp(76f), cy - dp(4f), title)
-        line.textSize = sp(22f); line.color = color(if (x.kind == ContactKind.OUT) R.color.text3 else R.color.text2)
+        line.textSize = sp(24f); line.color = color(if (x.kind == ContactKind.OUT) R.color.text3 else R.color.text2)
         c.drawText(status(x), dp(76f), cy + dp(28f), line)
         when (x.kind) {
             ContactKind.CALLING -> if (anim) postInvalidateOnAnimation() else postInvalidateDelayed(1_000)
@@ -788,7 +789,6 @@ class ChainStrip(context: Context, private val nodes: List<ChainNode>, private v
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val label = textPaint(700).apply { textAlign = Paint.Align.CENTER }
     private val mins = textPaint(500).apply { textAlign = Paint.Align.CENTER }
-    private val initial = textPaint(700).apply { textAlign = Paint.Align.CENTER }
     private val labels = nodes.map { it.name } + listOfNotNull(if (hasDest) "목적지" else null)
 
     init {
@@ -803,7 +803,6 @@ class ChainStrip(context: Context, private val nodes: List<ChainNode>, private v
     override fun onDraw(c: Canvas) {
         label.textSize = sp(22f); label.color = color(R.color.text1)
         mins.textSize = sp(22f); mins.color = color(R.color.text3)
-        initial.textSize = sp(14f); initial.color = color(R.color.on_accent)
         val widths = labels.map { label.measureText(it) }
         val xs = chainXs(planSec, dp(28f), width - maxOf(dp(28f), widths.last() / 2 + dp(8f)), widths.max() + dp(16f))
         val y = dp(58f)
@@ -829,7 +828,7 @@ class ChainStrip(context: Context, private val nodes: List<ChainNode>, private v
                 val r = dp(8f).toInt()
                 d.setBounds(x.toInt() - r, y.toInt() - r, x.toInt() + r, y.toInt() + r)
                 d.draw(c)
-            } else c.drawText(n.name.take(1), x, y - (initial.ascent() + initial.descent()) / 2, initial)
+            } // 6차: 노드 안 첫 글자(14sp)는 뺀다. 바로 아래 이름표가 같은 이름이다
             c.drawText(n.name, x, dp(104f), label)
         }
         if (hasDest) { // 목적지: 회색 원과 흰 점

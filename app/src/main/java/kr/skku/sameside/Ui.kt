@@ -20,6 +20,13 @@ val AVATAR_LINES = listOf(R.color.avatar1_line, R.color.avatar2_line, R.color.av
 /** 화면을 코드로 조립하는 작은 도구들. 글자 크기는 contracts 머리 */
 class Ui(val ctx: Context) {
     private val density = ctx.resources.displayMetrics.density
+    /** 6차: 열린 입력 창(사람 추가·내 차). 주행이 시작되거나 액티비티가 끝나면 닫는다(contracts §1) */
+    var dialog: android.app.AlertDialog? = null
+
+    fun closeDialog() {
+        runCatching { dialog?.dismiss() } // 창이 이미 떨어져 나갔으면 그냥 비운다
+        dialog = null
+    }
     fun px(v: Number) = (v.toFloat() * density).toInt()
     fun c(id: Int) = ctx.getColor(id)
 
@@ -31,7 +38,7 @@ class Ui(val ctx: Context) {
         setLineSpacing(0f, 1.18f)
     }
 
-    fun small(s: String) = text(s, 22f, R.color.text3, 600)
+    fun small(s: String) = text(s, 24f, R.color.text3, 600)
     fun headline(s: String, sp: Float = 48f) = text(s, sp, R.color.text1, 700)
     fun body(s: String, sp: Float = 26f) = text(s, sp, R.color.text2)
 
@@ -67,27 +74,28 @@ class Ui(val ctx: Context) {
         setPadding(px(32), px(28), px(32), px(28))
     }
 
-    fun chip(label: String, fg: Int, bg: Int, iconRes: Int = 0) = text(label, 20f, fg, 600).apply {
+    /** 상태 칩(누르지 않음). 6차: 차 기준 24sp */
+    fun chip(label: String, fg: Int, bg: Int, iconRes: Int = 0) = text(label, 24f, fg, 600).apply {
         background = round(c(bg), 100f)
-        setPadding(px(18), px(9), px(20), px(9))
+        setPadding(px(20), px(10), px(22), px(10))
         if (iconRes != 0) {
             val d = ctx.getDrawable(iconRes)!!.mutate()
             d.setTint(c(fg))
-            d.setBounds(0, 0, px(22), px(22))
+            d.setBounds(0, 0, px(26), px(26))
             setCompoundDrawablesRelative(d, null, null, null)
             compoundDrawablePadding = px(8)
         }
     }
 
-    /** 이름 첫 글자 원(3차 FR-046). 색은 이름마다 다섯 가지 중 하나다 */
-    fun avatar(name: String, size: Int = 48) = text(name.take(1), size * 0.42f, R.color.on_accent, 700).apply {
+    /** 이름 첫 글자 원(3차 FR-046). 색은 이름마다 다섯 가지 중 하나다. 6차: 58dp라 글자 약 24sp(대비는 장식 예외) */
+    fun avatar(name: String, size: Int = 58) = text(name.take(1), size * 0.42f, R.color.on_accent, 700).apply {
         gravity = Gravity.CENTER
         background = round(c(AVATARS[Math.floorMod(name.hashCode(), AVATARS.size)]), 100f)
         layoutParams = LinearLayout.LayoutParams(px(size), px(size))
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO // 이름은 옆 글자가 읽는다
     }
 
-    fun banner(text: String) = row(14, dot(R.color.red), text(text, 22f, R.color.red_text, 600), grow = 1).apply {
+    fun banner(text: String) = row(14, dot(R.color.red), text(text, 24f, R.color.red_text, 600), grow = 1).apply {
         background = round(c(R.color.red_soft), 18f, c(R.color.red))
         setPadding(px(24), px(18), px(24), px(18))
     }

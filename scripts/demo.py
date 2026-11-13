@@ -160,14 +160,21 @@ def ours(got, app):
         front()
 
 
+def cancel_pickup():
+    """6차: "픽업 취소"는 두 번 눌러야 된다(4초 안). 버튼 자리가 같으니 dump 없이 곧바로 한 번 더 누른다"""
+    x, y = tap("픽업 취소")
+    adb("shell", "input", "tap", str(x), str(y))
+
+
 def tap(text, timeout=20, app=True):
     end = time.time() + timeout
     while time.time() < end:
         found = screen()
         for t, x1, y1, x2, y2 in found:
             if t == text:
-                adb("shell", "input", "tap", str((int(x1) + int(x2)) // 2), str((int(y1) + int(y2)) // 2))
-                return True
+                x, y = (int(x1) + int(x2)) // 2, (int(y1) + int(y2)) // 2
+                adb("shell", "input", "tap", str(x), str(y))
+                return x, y
         ours([t for t, *_ in found], app)
         time.sleep(1)
     raise SystemExit(f"화면에서 '{text}'를 찾지 못했다")
@@ -497,11 +504,11 @@ def cont(mode="continue"):
         front()
         log("차 화면:", [t for t in texts() if "원래 목적지" in t])
         snap("continue-full-going.png")
-        tap("픽업 취소")
+        cancel_pickup()
         finish()
         return
     if mode == "continue-cancel":
-        tap("픽업 취소")
+        cancel_pickup()
         time.sleep(15)
         log("취소 15초 뒤 내비:", navi("state"))
         finish()
@@ -554,7 +561,7 @@ def reverse():
     log("운전자 음성:", spoken(t0))
     log("서버 crossOver:", (server(pid) or {}).get("crossOver"))
     adb("shell", "am", "start", "--user", USER, "-n", f"{PKG}/.MainActivity")
-    tap("픽업 취소")
+    cancel_pickup()
     finish()
 
 
@@ -581,7 +588,7 @@ def wrongside():
     log("옮긴 뒤 새 운전자 음성:", spoken(moved.get("t", devtime())))
     gear("Park")
     adb("shell", "am", "start", "--user", USER, "-n", f"{PKG}/.MainActivity")
-    tap("픽업 취소")
+    cancel_pickup()
     finish()
 
 
@@ -610,7 +617,7 @@ def transit(scene="transit"):
         snap("transit-going.png")
         time.sleep(5)
     log("취소")
-    tap("픽업 취소")
+    cancel_pickup()
     finish()
 
 
@@ -633,7 +640,7 @@ def cancel():
     share(pid, "opposite")
     wait_text(lambda t: t == "이 자리로 갈게요", what="지점 카드")
     time.sleep(int(SC["cancel"]["cancel_at"][0][0]))
-    tap("픽업 취소")
+    cancel_pickup()
     wait_text(lambda t: t == "픽업을 취소했어요", what="취소 문구")
     log("서버:", server(pid))
     finish()
@@ -644,7 +651,7 @@ def decline():
     assert passenger(pid, consent=False) == 204
     wait_text(lambda t: "위치를 공유하지 않았어요" in t, what="거절 문구")
     log("차 화면: 민지님이 위치를 공유하지 않았어요")
-    tap("픽업 취소")
+    cancel_pickup()
     finish()
 
 
@@ -653,7 +660,7 @@ def nospot():
     share(pid, "nospot")
     wait_text(lambda t: t == "가까운 곳에 같은 편 자리가 없어요", what="같은 편 자리 없음")
     log("서버:", (server(pid) or {}).get("status"))
-    tap("픽업 취소")
+    cancel_pickup()
     finish()
 
 
@@ -749,7 +756,7 @@ def chain():
         share(pid, sc, k)
     wait_text(lambda t: t == "만날 곳", what="만날 곳")
     w, h = (int(v) for v in re.findall(r"(\d+)x(\d+)", adb("shell", "wm", "size"))[-1])
-    for _ in range(6):  # 차례로 카드는 함께 모이는 곳 카드 아래라 첫 화면 밖이다: 오른쪽 칸을 밀어 올린다(begin_group 방식)
+    for _ in range(6):  # 6차부터 차례로 카드는 만날 곳 제목 바로 아래라 보통 바로 보인다. 안 보이면 오른쪽 칸을 밀어 올린다
         if "차례로 태울게요" in texts():
             break
         adb("shell", "input", "swipe", str(w * 7 // 10), str(h * 3 // 4), str(w * 7 // 10), str(h // 4), "500")

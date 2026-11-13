@@ -281,10 +281,10 @@ class MapTest {
         val pinLabel = Box(40f, 0f, 160f, 20f)
         val above = Box(90f, 5f, 130f, 25f) // 지점 이름표와 겹친다
         val below = Box(90f, 60f, 130f, 80f)
-        assertEquals(1, firstFree(listOf(above, below), listOf(pinLabel), 200f, 100f))
-        assertEquals(0, firstFree(listOf(below, above), listOf(pinLabel), 200f, 100f))
-        assertEquals(1, firstFree(listOf(Box(180f, 60f, 220f, 80f), below), emptyList(), 200f, 100f)) // 지도 밖은 건너뛴다
-        assertEquals(0, firstFree(listOf(above), listOf(pinLabel), 200f, 100f)) // 빈 자리가 없으면 첫 자리
+        assertEquals(1, freeIndex(listOf(above, below), listOf(pinLabel), 200f, 100f))
+        assertEquals(0, freeIndex(listOf(below, above), listOf(pinLabel), 200f, 100f))
+        assertEquals(1, freeIndex(listOf(Box(180f, 60f, 220f, 80f), below), emptyList(), 200f, 100f)) // 지도 밖은 건너뛴다
+        assertEquals(-1, freeIndex(listOf(above), listOf(pinLabel), 200f, 100f)) // 빈 자리가 없다: 덜 중요한 이름표는 그리지 않고, 나머지는 첫 자리(place)
         assertFalse(Box(0f, 0f, 10f, 10f).hits(Box(10f, 0f, 20f, 10f))) // 맞닿기만 하면 겹침이 아니다
     }
 

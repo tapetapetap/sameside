@@ -8,10 +8,14 @@
     <color name="line">#FFE3E5EA</color>
     <color name="text1">#FF131417</color>
     <color name="text2">#FF3A3C42</color>
-    <color name="text3">#FF6B6E76</color>
+    <color name="text3">#FF62656D</color> <!-- 6차: 회색 칩 바탕에서도 4.5:1 -->
     <color name="text4">#FF8B8F98</color>
     <color name="blue">#FF0064FF</color>
     <color name="blue_soft">#FFEAF1FF</color>
+    <!-- 6차 글자색(연한 바탕 위 4.5:1 이상) -->
+    <color name="blue_text">#FF0050D8</color>
+    <color name="green_text">#FF017A40</color>
+    <color name="amber_text">#FFA35A00</color>
     <color name="on_accent">#FFFFFFFF</color> <!-- 파랑·초록 바탕 위 글자, 두 테마 같음 -->
     <color name="red">#FFFE3D16</color>
     <color name="red_soft">#FFFFF4EF</color>

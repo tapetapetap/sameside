@@ -14,6 +14,9 @@
     <color name="blue">#FF0082FF</color>
     <color name="blue_dark">#FF0068E0</color>
     <color name="blue_soft">#FF13284A</color>
+    <color name="blue_text">#FF6CB4FF</color>
+    <color name="green_text">#FF00E074</color>
+    <color name="amber_text">#FFF2A33A</color>
     <color name="green">#FF00E074</color>
     <color name="on_accent">#FFFFFFFF</color> <!-- 파랑·초록 바탕 위 글자, 두 테마 같음 -->
     <color name="violet">#FF8A7BFF</color>
