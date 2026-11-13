@@ -47,8 +47,8 @@
 
 ## R6. 설정 변화 때 고르기 보존
 
-- **Decision**: `onSaveInstanceState`에 `together`와 고른 사람을 `People.encode(picked)`(이름·전화번호·가까이만 한 줄씩, 차례대로)로 넣고, `onCreate`에서 `People.decode`한 사람 가운데 `People.load` 목록에 있는 사람만 차례대로 되살린다(`distinct()`). 취소 확인 상태는 보존하지 않는다.
-- **Rationale**: 낮·밤 전환은 액티비티를 새로 만든다. 픽업 상태는 서비스에 있어 남지만 "여러 명 함께" 고르기는 액티비티에만 있어 사라진다. 사람 저장은 같은 이름을 막지 않으므로(`People.name()`은 길이만 본다) 이름만으로는 사람을 가릴 수 없다. `Person`은 data class라 세 값이 같으면 같은 사람이다.
+- **Decision**: `onSaveInstanceState`에 `together`와 고른 사람의 사람 목록 안 위치(`IntArray`, 차례대로)를 넣고, `onCreate`에서 `People.load` 목록의 그 위치에 있는 사람을 차례대로 되살린다(목록 밖 위치는 뺀다). 전화번호는 저장 상태에 넣지 않는다(PR 리뷰: 저장 상태는 시스템 프로세스에 보관되고 디스크로 갈 수 있다). 취소 확인 상태는 보존하지 않는다.
+- **Rationale**: 낮·밤 전환은 액티비티를 새로 만든다. 픽업 상태는 서비스에 있어 남지만 "여러 명 함께" 고르기는 액티비티에만 있어 사라진다. 사람 저장은 같은 이름을 막지 않으므로(`People.name()`은 길이만 본다) 이름만으로는 사람을 가릴 수 없어 목록 안 위치를 쓴다. 설정 변화 동안에는 사람 목록이 바뀌지 않는다.
 - **Alternatives considered**: `configChanges="uiMode"`(레이아웃 바탕 색을 손으로 다시 칠해야 함).
 
 ## R7. 색 값

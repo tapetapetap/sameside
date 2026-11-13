@@ -27,11 +27,12 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         ui = Ui(this)
-        // 6차: 낮·밤 전환처럼 다시 만들어질 때 "여러 명 함께" 고르기를 되살린다. 목록에 없는 사람은 뺀다(research R6)
+        // 6차: 낮·밤 전환처럼 다시 만들어질 때 "여러 명 함께" 고르기를 되살린다(research R6).
+        // 저장 상태에는 전화번호를 넣지 않고 사람 목록 안 위치만 둔다(PR 리뷰). 목록 밖 위치는 뺀다
         savedInstanceState?.let { b ->
             together = b.getBoolean("together")
             val all = People.load(this)
-            picked += People.decode(b.getString("picked").orEmpty()).filter { it in all }.distinct()
+            picked += b.getIntArray("picked")?.asList().orEmpty().mapNotNull { all.getOrNull(it) }
         }
         findViewById<View>(R.id.peoplePane).background = GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(getColor(R.color.pane_top), getColor(R.color.pane_bottom)),
@@ -59,7 +60,8 @@ class MainActivity : Activity() {
     override fun onSaveInstanceState(out: Bundle) {
         super.onSaveInstanceState(out)
         out.putBoolean("together", together)
-        out.putString("picked", People.encode(picked))
+        val all = People.load(this)
+        out.putIntArray("picked", picked.map { all.indexOf(it) }.filter { it >= 0 }.toIntArray())
     }
 
     override fun onDestroy() {

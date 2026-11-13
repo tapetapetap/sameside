@@ -106,5 +106,5 @@
 - **만날 곳 배치**(SPOTS): 제목 → 대중교통 강조 카드(있으면) → **차례로 태우기 카드(있으면)** → 만날 곳 카드들 → 취소 버튼.
 - **두 번째부터 만날 곳 카드**(`i > 0`): 지도 줄과 이유 줄을 빼고 이름(30sp) → 사람 줄 → 차 줄·비교 줄 → 버튼. 1순위 카드는 지금과 같다(지도 230dp, 이름 40sp, 이유 26sp).
 - **뒤로**(`onBackPressed`): `together`면 `together = false`, `picked.clear()`, `tooMany = false`, 다시 그림. 아니면 `super.onBackPressed()`.
-- **보존**: `onSaveInstanceState`에 `together`(Boolean), `picked`(`People.encode(picked)`, 차례대로). `onCreate`에서 `People.decode` 결과 중 `People.load` 목록에 있는 사람만 차례대로, `distinct()`로 되살린다.
+- **보존**: `onSaveInstanceState`에 `together`(Boolean), `picked`(사람 목록 안 위치 `IntArray`, 차례대로, 전화번호 없음). `onCreate`에서 `People.load` 목록의 그 위치에 있는 사람을 차례대로 되살린다(목록 밖 위치는 뺀다).
 - **취소 두 번 누르기**: `MainActivity.cancelUntil`(uptime). `situation(..., cancelArmed = now < cancelUntil, onCancel)`. 첫 누름: `cancelUntil = now + 4000`, 다시 그림, 4초 뒤 다시 그림. 두 번째 누름(확인 중): `cancelUntil = 0`, `PickupService.send(Event.Cancel)`. `render`가 한 줄 카드로 가거나 픽업이 없거나 끝난 상태(`p == null || p.status.ended`)를 그리면 `cancelUntil = 0`.
