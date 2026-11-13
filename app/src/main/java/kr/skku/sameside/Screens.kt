@@ -19,16 +19,28 @@ import com.google.zxing.qrcode.QRCodeWriter
 
 /** 분 표시는 모두 올림(data-model §8) */
 
+const val SERVER_DOWN = "서버에 연결하지 못했어요 · 2초마다 다시 시도해요"
+
+/** 6차 주행 중 한 줄 카드(contracts §1): 움직임·누를 것 없이 남은 분과 한 줄 */
+fun Ui.glanceCard(g: Glance): View = row(32, *listOfNotNull(
+    g.minutes?.let { text("${it}분", 72f, R.color.text1, 800) },
+    text(g.line, 32f, R.color.text1, 700),
+).toTypedArray(), grow = if (g.minutes == null) 0 else 1).apply {
+    background = round(c(R.color.card), 24f, c(R.color.line))
+    setPadding(px(40), px(40), px(40), px(40))
+}
+
 /** 앞 3자리와 끝 4자리만 보인다 */
 fun masked(phone: String) = if (phone.length < 7) phone else "${phone.take(3)}-****-${phone.takeLast(4)}"
 
 fun link(id: String) = "http://localhost:8090/p/$id"
 
 fun Ui.button(label: String, enabled: Boolean, primary: Boolean = true, onClick: () -> Unit) =
-    text(label, 24f, if (primary) R.color.on_accent else R.color.blue, 700).apply {
+    text(label, 24f, if (primary) R.color.on_accent else R.color.blue_text, 700).apply {
         gravity = Gravity.CENTER
         background = round(c(if (primary) R.color.blue else R.color.blue_soft), 18f)
-        setPadding(px(28), px(18), px(28), px(18))
+        setPadding(px(28), px(12), px(28), px(12)) // 두 줄로 넘쳐도 테두리에 붙지 않게
+        minHeight = px(76); minWidth = px(76) // 6차: 누르는 칸 76dp
         isEnabled = enabled
         alpha = if (enabled) 1f else 0.4f
         if (enabled) setOnClickListener { onClick() }
@@ -47,18 +59,21 @@ fun Ui.people(list: List<Person>, car: Car?, canPick: Boolean, together: Boolean
             layoutParams = LinearLayout.LayoutParams(px(36), px(36))
             contentDescription = if (on) "고름" else "고르지 않음"
         }
-        row(16, avatar(p.name), text(p.name, 28f, R.color.text1, 700), text(masked(p.phone), 22f, R.color.text3),
-            *listOfNotNull(if (p.careful) chip("가까이만", R.color.blue, R.color.blue_soft) else null, mark).toTypedArray(), grow = 2).apply {
+        row(16, avatar(p.name), text(p.name, 28f, R.color.text1, 700), text(masked(p.phone), 24f, R.color.text3),
+            *listOfNotNull(if (p.careful) chip("가까이만", R.color.blue_text, R.color.blue_soft) else null, mark).toTypedArray(), grow = 2).apply {
             background = round(c(R.color.card), 18f, c(if (p in picked && together) R.color.blue else R.color.line))
             setPadding(px(20), px(16), px(24), px(16))
+            minimumHeight = px(76)
             isEnabled = canPick
             alpha = if (canPick) 1f else 0.5f
             if (canPick) setOnClickListener { onPick(p) }
         }
     }
-    val toggle = text("여러 명 함께", 20f, if (together) R.color.on_accent else R.color.blue, 700).apply {
+    val toggle = text("여러 명 함께", 24f, if (together) R.color.on_accent else R.color.blue_text, 700).apply {
         background = if (together) round(c(R.color.blue), 100f) else round(c(R.color.card), 100f, c(R.color.blue), 2f)
-        setPadding(px(20), px(10), px(20), px(10))
+        setPadding(px(24), px(12), px(24), px(12))
+        gravity = Gravity.CENTER
+        minHeight = px(76); minWidth = px(76) // 6차: 누르는 칸 76dp
         isEnabled = canPick
         alpha = if (canPick) 1f else 0.5f
         if (canPick) setOnClickListener { onTogether() }
@@ -68,8 +83,8 @@ fun Ui.people(list: List<Person>, car: Car?, canPick: Boolean, together: Boolean
         if (tooMany) small("함께 태울 수 있는 사람은 ${Rules.MAX_GROUP}명까지예요") else null,
     )
     val carLine = car?.let { listOf(it.color, it.model, it.plate).filter(String::isNotBlank).joinToString(" ") }.orEmpty()
-    return column(18,
-        row(16, headline("데리러 갈 사람", 32f), toggle, grow = 0),
+    return column(24, // 6차: 누르는 줄 사이 24dp
+        row(24, headline("데리러 갈 사람", 32f), toggle, grow = 0),
         *rows.toTypedArray(),
         *go.toTypedArray(),
         button("+ 사람 추가", canPick, primary = false, onClick = onAdd),
@@ -79,21 +94,24 @@ fun Ui.people(list: List<Person>, car: Car?, canPick: Boolean, together: Boolean
 }
 
 /** 오른쪽 칸: 진행 중인 픽업의 상황. contactOf는 가는 중 연락 줄 상태(서비스의 통화 상태로 센다) */
-fun Ui.situation(p: Pickup?, park: Boolean, serverDown: Boolean, waiting: Boolean, contactOf: (Member) -> Contact,
+fun Ui.situation(p: Pickup?, park: Boolean, serverDown: Boolean, waiting: Boolean, contactOf: (Member) -> Contact, cancelArmed: Boolean,
                  onConfirm: (Int) -> Unit, onChain: () -> Unit, onCancel: () -> Unit, onDismiss: () -> Unit, onArrive: (Boolean) -> Unit): View {
-    val top = listOfNotNull(if (serverDown) banner("서버에 연결하지 못했어요 · 2초마다 다시 시도해요") else null)
-    val cancel = button("픽업 취소", park, primary = false, onClick = onCancel)
+    val top = listOfNotNull(if (serverDown) banner(SERVER_DOWN) else null)
+    // 6차: 두 번 눌러야 취소된다. 첫 누름 뒤 4초 동안 빨간 글자로 바뀐다(contracts §5)
+    val cancel = button(if (cancelArmed) "한 번 더 누르면 취소해요" else "픽업 취소", park, primary = false, onClick = onCancel)
+        .apply { if (cancelArmed) setTextColor(c(R.color.red_text)) }
     val who = p?.person?.name.orEmpty()
     val body: List<View> = when (p?.status) {
         null -> listOf(headline(if (waiting) "링크를 만들고 있어요" else "누구를 데리러 갈까요?"), body("왼쪽에서 사람을 고르면 링크를 만들어요"))
         Status.LINK -> if (p.group) groupLink(p) + cancel else listOf(
             qr(link(p.id)),
-            text(link(p.id), 22f, R.color.text3),
+            text(link(p.id), 24f, R.color.text3),
             headline(linkLine(p), 36f),
             cancel,
         )
-        Status.SPOTS -> listOfNotNull(headline("만날 곳", 40f), Pick.transitNote(p)?.let { (t, d) -> transitCard(t, d) }) +
-            p.spots.mapIndexed { i, s -> spotCard(p, s, i, park) { onConfirm(i) } } + listOfNotNull(p.chain?.let { chainCard(p, it, park, onChain) }) + cancel
+        // 6차: 차례로 태우기 카드를 제목·대중교통 카드 바로 아래로(contracts §5)
+        Status.SPOTS -> listOfNotNull(headline("만날 곳", 40f), Pick.transitNote(p)?.let { (t, d) -> transitCard(t, d) },
+            p.chain?.let { chainCard(p, it, park, onChain) }) + p.spots.mapIndexed { i, s -> spotCard(p, s, i, park) { onConfirm(i) } } + cancel
         Status.NOSPOT -> if (p.group) listOf(headline("함께 만날 곳이 없어요", 36f), body("한 명씩 데리러 가 주세요"), cancel)
         else listOf(headline("가까운 곳에 같은 편 자리가 없어요", 36f), body("위치 공유는 이어서 해요"), cancel)
         Status.GOING -> going(p, park, contactOf, onArrive) + cancel
@@ -118,10 +136,10 @@ private fun Ui.going(p: Pickup, park: Boolean, contactOf: (Member) -> Contact, o
     val here = if (p.chained) p.active.filter { it.stop == p.chosen } else p.active // 5차: 남은 시간 옆 이름은 지금 지점 사람
     return listOfNotNull(
         if (p.arriveCard) card(headline("도착했다고 알릴까요?", 40f),
-            row(16, button("보내기", park) { onArrive(true) }, button("아니요", park, primary = false) { onArrive(false) })) else null,
+            row(24, button("보내기", park) { onArrive(true) }, button("아니요", park, primary = false) { onArrive(false) })) else null,
         Pick.transitNote(p)?.let { (t, d) -> transitCard(t, d) }, // 4차: 도착 확인 카드 바로 아래
         p.chain?.takeIf { p.chained }?.let { // 5차: 같은 자리(차례 모드에는 대중교통 강조 카드가 없다)
-            card(text("차례로 태우는 중 · ${p.chosen + 1}/${p.spots.size}", 26f, R.color.text1, 700), strip(p, it, p.chosen))
+            card(text("차례로 태우는 중 · ${p.spots.size}곳 중 ${p.chosen + 1}번째", 28f, R.color.text1, 700), strip(p, it, p.chosen))
         },
         row(24, text("${minutes(p.etaSec ?: 0.0)}분", 72f, R.color.text1, 800),
             column(4, small("남은 시간"), body("${s?.line.orEmpty()} · ${names(here)}")), grow = 1),
@@ -129,7 +147,7 @@ private fun Ui.going(p: Pickup, park: Boolean, contactOf: (Member) -> Contact, o
         s?.let { map(it, mapPeople(p, it, going = true), p.track.lastOrNull()?.pos, 300f, 200.0) },
         if (p.group && aboard in 1 until p.active.size) small("${p.active.size}명 중 ${aboard}명 탔어요") else null,
         *p.members.map { m -> ContactRow(ctx, m.person.name) { contactOf(m) } }.toTypedArray(),
-        body("내비에 넣었어요. 출발하세요"),
+        body("내비에 만날 곳을 넣었어요"), // 6차: 기다리는 동안에도 맞는 말
         p.lostDest?.let { small("원래 목적지($it) 대신 만날 곳으로 안내해요") },
     )
 }
@@ -173,7 +191,7 @@ private fun Ui.groupLink(p: Pickup): List<View> = listOf(headline("함께 데리
         text("${m.person.name}님", 36f, R.color.text1, 700),
         row(10, *dots.toTypedArray(), small(if (no) "공유하지 않았어요" else "링크 열기 · 위치 공유 · 만날 곳")),
         qr(link(m.id), 200),
-        text(link(m.id), 22f, R.color.text3),
+        text(link(m.id), 24f, R.color.text3),
     )
 }
 
@@ -184,7 +202,7 @@ private fun Ui.transitCard(title: String, detail: String): View {
         setPadding(px(11), px(11), px(11), px(11))
         layoutParams = LinearLayout.LayoutParams(px(48), px(48))
     }
-    return row(20, circle, column(4, text(title, 28f, R.color.text1, 700), text(detail, 22f, R.color.text2)), grow = 1).apply {
+    return row(20, circle, column(4, text(title, 28f, R.color.text1, 700), text(detail, 24f, R.color.text2)), grow = 1).apply {
         background = round(c(R.color.blue_soft), 24f, c(R.color.blue), 2f)
         setPadding(px(28), px(24), px(28), px(24))
     }
@@ -207,16 +225,17 @@ private fun Ui.spotCard(p: Pickup, s: Spot, i: Int, park: Boolean, onPick: () ->
     val after = listOfNotNull(small("차 ${minutes(s.carSec)}분"),
         if (p.group) p.nearbySec?.takeIf { primary && p.chain == null }?.let { small("근처로 데리러 가면 약 ${minutes(it)}분") } // 5차: 계획이 있으면 차례로 카드
         else Pick.compareLine(s)?.let { small(it) }) // 2차: 건너기 n분 · 유턴 m분(함께 태우기에는 없다)
-    val height = if (primary) 230f else 150f
-    val shown = mapPeople(p, s, going = false, slots)
-    val maps = LinearLayout(ctx).apply {
-        addView(PeopleMap(ctx, DEMO, s, shown, height), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        addView(StopMap(ctx, DEMO, s, shown, height), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = px(12) })
+    // 6차: 두 번째부터는 지도와 이유를 빼고 짧게(contracts §5). 1순위는 그대로
+    val head = if (!primary) listOf(text(s.line, 30f, R.color.text1, 700)) else {
+        val shown = mapPeople(p, s, going = false, slots)
+        val maps = LinearLayout(ctx).apply {
+            addView(PeopleMap(ctx, DEMO, s, shown, 230f), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(StopMap(ctx, DEMO, s, shown, 230f), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = px(12) })
+        }
+        listOf(maps, text(s.line, 40f, R.color.text1, 700), body(s.reason, 26f))
     }
     return card(
-        maps,
-        text(s.line, if (primary) 40f else 30f, R.color.text1, 700),
-        body(s.reason, if (primary) 26f else 22f),
+        *head.toTypedArray(),
         *(people + after).toTypedArray(),
         button("이 자리로 갈게요", park, primary = primary, onClick = onPick),
     )
@@ -227,7 +246,7 @@ private fun Ui.chainCard(p: Pickup, c: Chain, park: Boolean, onChain: () -> Unit
     text("차례로 태우기", 30f, R.color.text1, 700),
     text("${c.stops.joinToString(" → ") { stopNames(p, it) }} 차례로 · 약 ${minutes(c.legs.sum())}분", 24f, R.color.text2),
     strip(p, c, -1),
-    *c.stops.mapIndexed { k, st -> text("${k + 1}. ${st.spot.line} · ${stopNames(p, st)}", 22f, R.color.text3) }.toTypedArray(),
+    *c.stops.mapIndexed { k, st -> text("${k + 1}. ${st.spot.line} · ${stopNames(p, st)}", 24f, R.color.text3) }.toTypedArray(),
     button("차례로 태울게요", park, onClick = onChain),
 )
 
@@ -267,12 +286,15 @@ private fun field(ctx: Context, hint: String, phone: Boolean = false) = EditText
     inputType = if (phone) InputType.TYPE_CLASS_PHONE else InputType.TYPE_CLASS_TEXT
 }
 
-private fun error(ui: Ui) = ui.text("", 20f, R.color.red_text, 600).apply { visibility = View.GONE }
+private fun error(ui: Ui) = ui.text("", 24f, R.color.red_text, 600).apply { visibility = View.GONE }
 
-private fun show(ctx: Context, title: String, view: View, onSave: () -> Boolean) {
+private fun Ui.show(title: String, view: View, onSave: () -> Boolean) {
+    closeDialog() // 6차: 두 번 눌러 창이 둘 생기지 않게 열린 창을 먼저 닫는다
     val d = AlertDialog.Builder(ctx).setTitle(title).setView(view)
         .setPositiveButton("저장", null).setNegativeButton("취소", null).create()
     d.setOnShowListener { d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { if (onSave()) d.dismiss() } }
+    d.setOnDismissListener { if (dialog === d) dialog = null }
+    dialog = d
     d.show()
 }
 
@@ -284,7 +306,7 @@ fun Ui.addPerson(onSaved: (Person) -> Unit) {
     val phone = field(ctx, "전화번호", phone = true); val phoneErr = error(this)
     val careful = CheckBox(ctx).apply { text = "아이·어르신(가까운 곳만 찾아요)" }
     val view = column(8, name, nameErr, phone, phoneErr, careful).apply { setPadding(px(24), px(8), px(24), 0) }
-    show(ctx, "데리러 갈 사람", view) {
+    show("데리러 갈 사람", view) {
         val n = People.name(name.text.toString()); val p = People.phone(phone.text.toString())
         nameErr.say(if (n == null) "이름은 1~10자로 적어 주세요" else null)
         phoneErr.say(if (p == null) "전화번호를 확인해 주세요" else null)
@@ -301,7 +323,7 @@ fun Ui.editCar(now: Car?, onSaved: (Car) -> Unit) {
     val phone = field(ctx, "내 번호(선택)", phone = true).apply { setText(now?.phone) }
     val err = error(this)
     val view = column(8, model, color, plate, phone, err).apply { setPadding(px(24), px(8), px(24), 0) }
-    show(ctx, "내 차", view) {
+    show("내 차", view) {
         val c = People.car(model.text.toString(), color.text.toString(), plate.text.toString(), phone.text.toString())
         err.say(if (c == null) "전화번호를 확인해 주세요" else null)
         c?.let(onSaved)

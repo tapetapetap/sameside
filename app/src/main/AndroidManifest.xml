@@ -29,11 +29,12 @@
         android:supportsRtl="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
-        <!-- 정차 중에만 조작하는 화면이라 DO(주행 중 사용 허용)를 선언하지 않는다(원칙 I) -->
+        <!-- 6차: 주행 중에는 움직이지 않고 누를 것 없는 한 줄 카드만 보이므로 DO를 선언한다(원칙 I 1.1.0, specs/006-car-screen) -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask">
+            <meta-data android:name="distractionOptimized" android:value="true" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

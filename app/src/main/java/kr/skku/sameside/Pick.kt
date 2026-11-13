@@ -290,6 +290,41 @@ enum class ContactKind { OUT, ABOARD, CALLING, READY, ACK, MOVING, CALLED, PHONE
 /** sec: CALLING은 통화 경과, CALLED는 건 뒤 경과, NOTIFIED는 전화까지 남은 초(0 아래면 0) */
 data class Contact(val kind: ContactKind, val sec: Int?)
 
+/** 6차 주행 중 한 줄 카드(specs/006-car-screen contracts §1). minutes는 가는 중에만 */
+data class Glance(val minutes: Int?, val line: String)
+
+/** 한 줄 카드의 연락 상태 글: 정차 화면 연락 줄과 같은 말이되 초가 흐르는 숫자는 뺀다(research R3) */
+fun shortStatus(k: ContactKind) = when (k) {
+    ContactKind.OUT -> "함께 안 타요"
+    ContactKind.ABOARD -> "탔어요"
+    ContactKind.CALLING -> "통화 중"
+    ContactKind.READY -> "나와 있어요"
+    ContactKind.ACK -> "지금 나간대요"
+    ContactKind.MOVING -> "나오고 있어요"
+    ContactKind.CALLED -> "전화를 걸었어요"
+    ContactKind.PHONE_NOTIFIED -> "폰으로 알렸어요"
+    ContactKind.NOTIFIED -> "나오라고 알렸어요"
+    ContactKind.WAIT -> "가까워지면 알려요"
+}
+
+/** 주행 중 한 줄: 위에서부터 처음 맞는 줄. 다음 사람은 차례면 지금 지점 사람, 아니면 안 탄 첫 사람 */
+fun glance(p: Pickup?, creating: Boolean, contactOf: (Member) -> Contact): Glance = when (p?.status) {
+    null -> Glance(null, if (creating) "링크를 만들고 있어요" else "운전 중이에요 · 픽업은 차를 세우고 시작해요")
+    Status.MET -> Glance(null, "만났어요")
+    Status.CANCELED -> Glance(null, "픽업을 취소했어요")
+    Status.STOPPED -> Glance(null, "${(p.lastLeft ?: p.lead).person.name}님이 위치 공유를 껐어요")
+    Status.EXPIRED -> Glance(null, "시간이 지나 위치 공유를 끝냈어요")
+    Status.LINK -> Glance(null, if (p.group) "함께 데리러 가요 · 위치를 기다려요" else linkLine(p))
+    Status.SPOTS -> Glance(null, if (p.spots.isEmpty()) "차례로 태우기 · 차를 세우면 골라요" else "만날 곳 ${p.spots.size}곳 · 차를 세우면 골라요")
+    Status.NOSPOT -> Glance(null, if (p.group) "함께 만날 곳이 없어요" else "가까운 곳에 같은 편 자리가 없어요")
+    Status.GOING -> {
+        val waiting = p.active.filter { !it.aboard }
+        val next = (if (p.chained) waiting.firstOrNull { it.stop == p.chosen } else null) ?: waiting.firstOrNull()
+        if (next == null) Glance(null, "모두 탔어요")
+        else Glance(p.etaSec?.let { minutes(it) }, "${next.person.name}님 · ${shortStatus(contactOf(next).kind)}") // 남은 시간을 모르면 분을 숨긴다
+    }
+}
+
 /** 위에서부터 처음 맞는 상태. inCall이 null이면 통화 상태를 볼 수 없다. latest: m이 가장 최근에 전화한 사람 */
 fun contact(m: Member, inCall: Boolean?, callSince: Long?, latest: Boolean, now: Long): Contact {
     fun since(t: Long?) = ((now - (t ?: now)) / 1000).toInt()
