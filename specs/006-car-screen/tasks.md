@@ -73,12 +73,12 @@
 
 - [X] T023 빌드·테스트·서버 점검·설치(quickstart §1)
 - [X] T024 에뮬레이터 확인 quickstart §2~5. 캡처를 `/Users/jiwon/Desktop/현대자동차 공모전/화면 점검 1113/고친 뒤/같은편/`에, UI 덤프 크기표를 verification.md에
-- [ ] T025 장면 회귀 quickstart §6(21개, 기준은 `영상 도구/videos-pickup4/log/<장면>.log`)
+- [X] T025 장면 회귀 quickstart §6(21개, 기준은 `영상 도구/videos-pickup4/log/<장면>.log`)
 - [X] T026 `/impeccable audit`·`critique` 다시, 점수를 verification.md에. 남은 P1은 `/impeccable polish`(contracts 범위 안)
 - [X] T027 ponytail-review(`git diff backup/before-car-sameside -- app scripts`) 반영
 - [X] T028 `/code-review`(high) 반영, 보안 직접 점검(주행 최적화 선언으로 새로 보이는 정보가 이름과 상태뿐인지, 전화번호가 한 줄 카드·로그에 없는지)
 - [X] T029 `specs/006-car-screen/verification.md`: SC-031~037, 캡처 경로, 점수 전후, 리뷰 반영
-- [ ] T030 로컬 커밋(브랜치 `car-sameside`, 푸시하지 않음)
+- [X] T030 로컬 커밋(브랜치 `car-sameside`, 푸시하지 않음)
 
 ## Dependencies & Execution Order
 
