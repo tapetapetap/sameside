@@ -1,0 +1,47 @@
+# PR을 열거나 커밋을 더하면 Claude가 코드를 리뷰하고 PR에 한국어 댓글을 단다.
+# 필요한 것(저장소마다 한 번):
+#   - Claude GitHub 앱 설치: https://github.com/apps/claude
+#   - 저장소 비밀 값 CLAUDE_CODE_OAUTH_TOKEN(`claude setup-token`) 또는 ANTHROPIC_API_KEY 중 하나
+# 이 파일이 기본 브랜치(main)와 같아야 리뷰가 돈다(action의 워크플로 확인). 이 파일을 바꾸는 PR에서는 리뷰가 건너뛰어진다.
+name: Claude 코드 리뷰
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            이 PR을 리뷰해 줘. PR 브랜치는 지금 작업 폴더에 체크아웃돼 있다.
+            대상은 현대자동차 Pleos 차량용 안드로이드 앱(Kotlin)과 그 시연 스크립트·서버다.
+
+            볼 것(중요한 순서):
+            - 정확성: 버그, 경계 조건, 상태 처리(설정 변경, 뒤로, 주행·정차 전환), 수명 주기·스레드
+            - 보안·개인정보: 권한, 위치·전화번호 노출, 입력 검증
+            - 성능: 불필요한 다시 그리기, 메모리
+            - 차 화면 기준: 운전 중 주의 분산, 누르는 칸 76dp, 글자 24sp 이상
+            문서(specs/, docs/, README)만 바뀐 부분은 코드와 어긋나는 사실 오류만 본다.
+            취향 차이나 사소한 스타일은 적지 않는다.
+
+            결과는 한국어로, GitHub 댓글로만 남긴다(메시지로 리뷰 글을 따로 쓰지 않는다):
+            - 구체적인 문제는 `mcp__github_inline_comment__create_inline_comment`(confirmed: true)로 그 줄에 단다.
+            - 마지막에 `gh pr comment`로 요약 댓글 하나: 찾은 문제 수와 심각도. 문제가 없으면 "문제를 찾지 못했어요."
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
