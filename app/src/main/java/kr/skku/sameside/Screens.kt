@@ -93,8 +93,8 @@ fun Ui.people(list: List<Person>, car: Car?, canPick: Boolean, together: Boolean
     )
 }
 
-/** 오른쪽 칸: 진행 중인 픽업의 상황. contactOf는 가는 중 연락 줄 상태(서비스의 통화 상태로 센다) */
-fun Ui.situation(p: Pickup?, park: Boolean, serverDown: Boolean, waiting: Boolean, contactOf: (Member) -> Contact, cancelArmed: Boolean,
+/** 오른쪽 칸: 진행 중인 픽업의 상황. contactOf는 가는 중 연락 줄 상태(서비스의 통화 상태로 센다). noPeople은 저장한 사람이 없음(7차 FR-113) */
+fun Ui.situation(p: Pickup?, park: Boolean, serverDown: Boolean, waiting: Boolean, noPeople: Boolean, contactOf: (Member) -> Contact, cancelArmed: Boolean,
                  onConfirm: (Int) -> Unit, onChain: () -> Unit, onCancel: () -> Unit, onDismiss: () -> Unit, onArrive: (Boolean) -> Unit): View {
     val top = listOfNotNull(if (serverDown) banner(SERVER_DOWN) else null)
     // 6차: 두 번 눌러야 취소된다. 첫 누름 뒤 4초 동안 빨간 글자로 바뀐다(contracts §5)
@@ -102,7 +102,7 @@ fun Ui.situation(p: Pickup?, park: Boolean, serverDown: Boolean, waiting: Boolea
         .apply { if (cancelArmed) setTextColor(c(R.color.red_text)) }
     val who = p?.person?.name.orEmpty()
     val body: List<View> = when (p?.status) {
-        null -> listOf(headline(if (waiting) "링크를 만들고 있어요" else "누구를 데리러 갈까요?"), body("왼쪽에서 사람을 고르면 링크를 만들어요"))
+        null -> intro(waiting, noPeople)
         Status.LINK -> if (p.group) groupLink(p) + cancel else listOf(
             qr(link(p.id)),
             text(link(p.id), 24f, R.color.text3),
@@ -127,6 +127,29 @@ fun Ui.situation(p: Pickup?, park: Boolean, serverDown: Boolean, waiting: Boolea
         Status.EXPIRED -> listOf(headline("시간이 지나 위치 공유를 끝냈어요", 40f), button("확인", true, onClick = onDismiss))
     }
     return column(28, *(top + body).toTypedArray())
+}
+
+/** 7차 픽업 없음(FR-112~115): 앱 이름, 제목, 단계 카드 셋. 틀은 다른 두 앱 첫 실행(firstRun·first)과 같다. 1:1 세로에서는 사람 칸이 아래라 방향 말("왼쪽")을 쓰지 않는다 */
+private fun Ui.intro(waiting: Boolean, noPeople: Boolean): List<View> {
+    fun step(n: Int, bg: Int, fg: Int, title: String, sub: String) = row(24,
+        text("$n", 24f, fg, 700).apply {
+            gravity = Gravity.CENTER
+            background = round(c(bg), 100f)
+            layoutParams = LinearLayout.LayoutParams(px(52), px(52))
+        },
+        column(4, text(title, 28f, R.color.text1, 600), text(sub, 24f, R.color.text3)), grow = 1,
+    ).apply {
+        background = round(c(R.color.card), 22f, c(R.color.line))
+        setPadding(px(28), px(24), px(28), px(24))
+    }
+    return listOf(
+        small("같은편"),
+        headline(if (waiting) "링크를 만들고 있어요" else if (noPeople) "먼저 데리러 갈 사람을 추가해 주세요" else "누구를 데리러 갈까요?"),
+        if (noPeople) step(1, R.color.blue, R.color.on_accent, "사람 추가하기", "\"+ 사람 추가\"로 이름과 번호를 넣어요")
+        else step(1, R.color.blue, R.color.on_accent, "사람 고르기", "데리러 갈 사람을 누르면 링크를 만들어요"),
+        step(2, R.color.blue, R.color.on_accent, "링크 보내기", "태울 사람은 앱 없이 링크를 열어 위치를 공유해요"),
+        step(3, R.color.green_soft, R.color.green_text, "만날 곳과 연락은 앱이", "차가 오는 쪽 만날 곳을 고르고, 가까워지면 나오라고 알려요. 답이 없으면 60초 뒤 전화해요"),
+    )
 }
 
 /** 가는 중(contracts/ui.md §2): 큰 남은 분, 막대, 지도(차), 연락 줄. 2차 도착 확인 카드는 맨 위, 버튼은 P에서만 */

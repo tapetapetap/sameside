@@ -117,7 +117,7 @@ class MainActivity : Activity() {
             },
             onCar = { ui.editCar(People.loadCar(this)) { People.saveCar(this, it); render() } },
         ).also { if (full) (it as LinearLayout).addView(ui.small("최대 20명까지 저장해요")); full = false })
-        replace(R.id.screen, ui.situation(p, park, PickupService.serverDown, waiting = p == null && PickupService.creating,
+        replace(R.id.screen, ui.situation(p, park, PickupService.serverDown, waiting = p == null && PickupService.creating, noPeople = list.isEmpty(),
             contactOf = { m -> contact(m, PickupService.inCall, PickupService.callSince, p?.lastCaller === m, SystemClock.elapsedRealtime()) },
             cancelArmed = SystemClock.uptimeMillis() < cancelUntil,
             onConfirm = { PickupService.send(Event.Confirm(it)) },

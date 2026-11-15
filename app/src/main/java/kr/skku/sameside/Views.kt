@@ -282,8 +282,13 @@ abstract class MapBase(context: Context, protected val area: Area, private val h
         small.style = Paint.Style.FILL; small.color = color(R.color.text2)
         c.drawText(scaleLabel(barM), dp(16f), h - dp(24f), small)
         small.textAlign = Paint.Align.RIGHT
-        small.textSize = sp(14f); small.color = color(R.color.text3) // 출처 표기만 14sp(spec FR-103)
-        c.drawText("© OpenStreetMap", w - dp(10f), h - dp(8f), small)
+        small.textSize = sp(14f) // 출처 표기만 14sp(spec FR-103). 색은 축척 글과 같은 text2(7차 FR-116)
+        val osm = "© OpenStreetMap"
+        val tw = small.measureText(osm) // 14sp로 잰다(20sp면 바탕이 reserveCorners 출처 칸을 넘는다)
+        fill.color = color(R.color.card); fill.alpha = 217 // 7차 FR-116: mapName과 같은 카드색 85% 둥근 바탕
+        c.drawRoundRect(w - dp(16f) - tw, h - dp(11f) + small.ascent(), w - dp(4f), h - dp(5f) + small.descent(), dp(6f), dp(6f), fill)
+        fill.alpha = 255
+        c.drawText(osm, w - dp(10f), h - dp(8f), small)
         c.restore()
     }
 }
@@ -317,8 +322,7 @@ class SpotMap(context: Context, area: Area, private val spot: Spot, private val 
         val margin = dp(22f) / k
         val halfW = (w / 2 / k - margin).toDouble()
         val halfH = (h / 2 / k - margin).toDouble()
-        val green = color(R.color.green)
-        val greenText = color(R.color.green_text) // 6차: 글자는 4.5:1 이상
+        // 7차 FR-117: 점·걷는 점선·가장자리 화살표는 사람 색(차례 그림·만날 곳 지도와 같은 번호), 이름은 text1
         small.textSize = sp(20f)
         bold.textSize = sp(20f)
         // 걷는 점선(지도 안 사람만)
@@ -327,7 +331,7 @@ class SpotMap(context: Context, area: Area, private val spot: Spot, private val 
             if (edge(q.x, q.y, halfW, halfH) != null) continue
             val (x, y) = px(m.pos)
             stroke.pathEffect = walkDash
-            stroke.color = green; stroke.strokeWidth = dp(3f)
+            stroke.color = color(AVATAR_LINES[m.slot]); stroke.strokeWidth = dp(3f)
             c.drawLine(x, y, sx, sy, stroke)
             stroke.pathEffect = null
         }
@@ -362,7 +366,7 @@ class SpotMap(context: Context, area: Area, private val spot: Spot, private val 
             if (e == null) {
                 val (x, y) = px(pos)
                 fill.color = color(R.color.on_accent); c.drawCircle(x, y, dp(10f), fill)
-                fill.color = green; c.drawCircle(x, y, dp(7.5f), fill)
+                fill.color = color(AVATAR_LINES[m.slot]); c.drawCircle(x, y, dp(7.5f), fill)
                 taken += box(x, y, dp(10f))
                 inside += Triple(m.name, x, y)
                 continue
@@ -371,9 +375,10 @@ class SpotMap(context: Context, area: Area, private val spot: Spot, private val 
             outside.firstOrNull { abs(it.second.first - at.first) < dp(48f) && abs(it.second.second - at.second) < dp(48f) }
                 ?.first?.add(m) ?: outside.add(Triple(mutableListOf(m), at, q))
         }
-        for ((_, at, q) in outside) {
+        for ((group, at, q) in outside) {
             val len = hypot(q.x, q.y).toFloat()
-            arrowHead(c, at.first, at.second, q.x.toFloat() / len, -q.y.toFloat() / len, dp(12f), green)
+            arrowHead(c, at.first, at.second, q.x.toFloat() / len, -q.y.toFloat() / len, dp(15f), color(R.color.on_accent)) // 사람 점처럼 흰 테두리(진입 화살표와 구분)
+            arrowHead(c, at.first, at.second, q.x.toFloat() / len, -q.y.toFloat() / len, dp(12f), color(AVATAR_LINES[group[0].slot])) // 묶음은 첫 사람 색
             taken += box(at.first, at.second, dp(12f))
         }
         // 차(가는 중, 지도 안일 때)
@@ -391,7 +396,7 @@ class SpotMap(context: Context, area: Area, private val spot: Spot, private val 
         // 이름표: 북쪽·축척·출처 자리를 비워 두고, 지점 → 지도 안 사람 → 가장자리 사람 → 기준 랜드마크 차례로 빈 자리에
         reserveCorners(w, h, 50f * k, null)
         place(c, spot.line, listOf(sx to sy - dp(44f), sx to sy + dp(30f)), bold, color(R.color.text1))
-        for ((name, x, y) in inside) place(c, name, around(name, x, y, dp(16f), bold), bold, greenText)
+        for ((name, x, y) in inside) place(c, name, around(name, x, y, dp(16f), bold), bold, color(R.color.text1))
         for ((group, at, q) in outside) {
             val (ex2, ey2) = at
             val who = group.joinToString("·") { it.name }
@@ -400,7 +405,7 @@ class SpotMap(context: Context, area: Area, private val spot: Spot, private val 
             fun cx(x: Float) = if (half * 2 >= w) w / 2 else x.coerceIn(half, w - half) // 지도보다 긴 이름표도 죽지 않게
             val ty = (ey2 + if (q.y > 0) dp(30f) else -dp(16f)).coerceIn(dp(22f), h - dp(10f))
             place(c, text, listOf(cx(ex2) to ty, cx(ex2 + half + dp(20f)) to ey2 + dp(6f), cx(ex2 - half - dp(20f)) to ey2 + dp(6f),
-                cx(ex2) to ty + dp(26f), cx(ex2) to ty - dp(26f)), bold, greenText)
+                cx(ex2) to ty + dp(26f), cx(ex2) to ty - dp(26f)), bold, color(R.color.text1))
         }
         passing?.let { (name, x, y) -> place(c, name, around(name, x, y, dp(10f), small), small, color(R.color.text3), optional = true) }
         corners(c, 50, k, w, h)
